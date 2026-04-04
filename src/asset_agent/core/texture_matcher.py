@@ -243,6 +243,57 @@ class TextureMatcher:
                             mtl_assignments.setdefault(ch, p)
         return self._match_with_mtl(texture_dir, recursive=recursive, mtl_assignments=mtl_assignments)
 
+    def match_multi(
+        self,
+        texture_dir: Path,
+        material_names: list[str],
+        *,
+        recursive: bool = True,
+        obj_path: Path | None = None,
+    ) -> dict[str, TextureMap]:
+        """Match textures independently for each material name.
+
+        Uses the material name as the ``model_name`` disambiguation hint.
+        Materials that yield no albedo get an empty ``TextureMap`` instead of raising.
+
+        Args:
+            texture_dir: Folder containing PBR textures.
+            material_names: List of material names (from MTL ``newmtl``).
+            recursive: Descend into sub-directories.
+            obj_path: Optional OBJ path for MTL first-pass per material.
+
+        Returns:
+            ``{material_name: TextureMap}`` for every name in *material_names*.
+        """
+        # Pre-parse MTL once for all materials
+        mtl_per_material: dict[str, dict[str, Path]] = {}
+        if obj_path is not None:
+            from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
+            mtl_file = find_mtl_for_obj(obj_path)
+            if mtl_file:
+                mtl_per_material = parse_mtl(mtl_file)
+
+        result: dict[str, TextureMap] = {}
+        for mat_name in material_names:
+            sub_matcher = TextureMatcher(
+                rules=self.rules,
+                format_priority=self.format_priority,
+                model_name=mat_name,
+            )
+            mtl_assignments = mtl_per_material.get(mat_name, {})
+            try:
+                texture_map = sub_matcher._match_with_mtl(
+                    texture_dir,
+                    recursive=recursive,
+                    mtl_assignments=mtl_assignments,
+                )
+            except MissingAlbedoError:
+                logger.warning("No albedo found for material '%s'; using empty map.", mat_name)
+                texture_map = TextureMap()
+            result[mat_name] = texture_map
+
+        return result
+
     def _match_with_mtl(
         self,
         texture_dir: Path,

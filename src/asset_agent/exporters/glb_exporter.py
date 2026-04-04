@@ -42,6 +42,35 @@ class GlbExportSettings:
         return []
 
 
+def build_multi_textures_payload(
+    material_maps: dict,
+) -> list[dict]:
+    """Convert a per-material ``{name: TextureMap}`` into the JSON payload
+    for multi-material Blender scenes.
+
+    Each entry includes a ``"material"`` field identifying the Blender
+    material slot it belongs to.
+
+    Args:
+        material_maps: ``{material_name: TextureMap}``
+
+    Returns:
+        List of dicts with ``channel``, ``path``, ``color_space``,
+        ``is_glossiness``, and ``material`` fields.
+    """
+    payload: list[dict] = []
+    for material_name, texture_map in material_maps.items():
+        for channel, match in texture_map.as_dict().items():
+            payload.append({
+                "material": material_name,
+                "channel": channel,
+                "path": str(match.path.resolve()),
+                "color_space": match.color_space,
+                "is_glossiness": match.is_glossiness,
+            })
+    return payload
+
+
 def build_textures_payload(
     texture_map_dict: dict[str, Any],
 ) -> list[dict[str, Any]]:

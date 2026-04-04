@@ -22,6 +22,7 @@ import pytest
 
 from asset_agent.core.texture_matcher import (
     TextureMap,
+    TextureMatch,
     TextureMatcher,
     create_matcher,
     load_channel_rules,
@@ -469,3 +470,59 @@ class TestMtlIntegration:
 
         assert result.albedo is not None
         assert result.normal is not None
+
+
+class TestMatchMulti:
+    """TextureMatcher.match_multi() returns a TextureMap per material."""
+
+    def test_match_multi_returns_dict_keyed_by_material(self, tmp_path):
+        for name in ["boards_diffuse.png", "planks_diffuse.png"]:
+            (tmp_path / name).write_bytes(b"stub")
+
+        matcher = create_matcher()
+        result = matcher.match_multi(tmp_path, material_names=["boards", "planks"])
+
+        assert isinstance(result, dict)
+        assert "boards" in result
+        assert "planks" in result
+
+    def test_match_multi_each_value_is_texture_map(self, tmp_path):
+        (tmp_path / "mat_albedo.png").write_bytes(b"stub")
+
+        matcher = create_matcher()
+        result = matcher.match_multi(tmp_path, material_names=["mat"])
+        assert isinstance(result["mat"], TextureMap)
+
+    def test_match_multi_missing_albedo_yields_empty_map(self, tmp_path):
+        matcher = create_matcher()
+        result = matcher.match_multi(tmp_path, material_names=["unknown"])
+        assert result["unknown"].albedo is None
+
+
+class TestBuildMultiTexturesPayload:
+    """build_multi_textures_payload() encodes a material field in each entry."""
+
+    def test_payload_includes_material_field(self, tmp_path):
+        from asset_agent.exporters.glb_exporter import build_multi_textures_payload
+
+        tex = tmp_path / "blade_albedo.png"
+        tex.write_bytes(b"stub")
+
+        maps = {
+            "blade": TextureMap(
+                albedo=TextureMatch(path=tex, channel="albedo", color_space="sRGB"),
+            )
+        }
+        payload = build_multi_textures_payload(maps)
+        assert len(payload) == 1
+        assert payload[0]["material"] == "blade"
+        assert payload[0]["channel"] == "albedo"
+
+    def test_single_material_payload_has_no_material_field(self, tmp_path):
+        from asset_agent.exporters.glb_exporter import build_textures_payload
+
+        tex = tmp_path / "blade_albedo.png"
+        tex.write_bytes(b"stub")
+        tm = TextureMap(albedo=TextureMatch(path=tex, channel="albedo", color_space="sRGB"))
+        payload = build_textures_payload(tm.as_dict())
+        assert all("material" not in entry for entry in payload)
