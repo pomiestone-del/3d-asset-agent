@@ -1,0 +1,65 @@
+# PBR texture channel matching patterns.
+# Each entry maps a channel name to a regex pattern (case-insensitive).
+# The regex is tested against the file *stem* (no extension).
+# First match wins; order of channels in this file defines priority.
+
+channels:
+  albedo:
+    pattern: "(basecolor|base_color|base-color|albedo|diffuse|diff|col(?:or)?|(?<![a-z])bc(?![a-z]))(?!.*(?:ao|occl))"
+    color_space: "sRGB"
+    required: true
+
+  normal:
+    pattern: "(normal|nrm|norm|nor|nml|(?<![a-z])n(?![a-z]))(?!.*(?:ao|occl))"
+    color_space: "Non-Color"
+
+  roughness:
+    pattern: "(roughness|rough|rgh|gloss|glossiness)"
+    color_space: "Non-Color"
+    glossiness_keywords: ["gloss", "glossiness"]
+
+  metallic:
+    pattern: "(metallic|metal(?:ness)?|met(?![a-z]))"
+    color_space: "Non-Color"
+
+  ao:
+    pattern: "((?:ambient.?)?occ(?:lusion)?|(?<![a-z])ao(?![a-z]))"
+    color_space: "Non-Color"
+
+  emissive:
+    pattern: "(emissive|emission|emit|glow|self.?illum)"
+    color_space: "sRGB"
+
+  opacity:
+    pattern: "(opacity|alpha|transparency|trans(?![a-z])|mask)"
+    color_space: "Non-Color"
+
+  displacement:
+    pattern: "(displacement|disp|height|hgt)(?!.*norm)"
+    color_space: "Non-Color"
+
+  orm:
+    pattern: "((?<![a-z])orm(?![a-z])|packed|(?<![a-z])arm(?![a-z])|(?<![a-z])rma(?![a-z]))"
+    color_space: "Non-Color"
+
+# Supported image file extensions (lowercase, with leading dot).
+image_extensions:
+  - ".png"
+  - ".jpg"
+  - ".jpeg"
+  - ".tga"
+  - ".tiff"
+  - ".tif"
+  - ".exr"
+  - ".bmp"
+
+# When multiple candidates match the same channel, prefer formats in this order.
+format_priority:
+  - ".png"
+  - ".exr"
+  - ".tga"
+  - ".jpg"
+  - ".jpeg"
+  - ".tiff"
+  - ".tif"
+  - ".bmp"

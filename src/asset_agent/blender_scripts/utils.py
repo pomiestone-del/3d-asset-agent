@@ -1,0 +1,187 @@
+"""Blender-side utility helpers.
+
+Runs inside Blender's embedded Python.  Do NOT import asset_agent modules.
+Only stdlib + bpy are available.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import sys
+from pathlib import Path
+
+import bpy  # type: ignore[import-unresolved]
+from mathutils import Vector  # type: ignore[import-unresolved]
+
+log = logging.getLogger("blender_scripts")
+
+
+# ---------------------------------------------------------------------------
+# Bootstrapping
+# ---------------------------------------------------------------------------
+
+def bootstrap_script_dir() -> None:
+    """Add the directory containing these scripts to *sys.path* so they can
+    import each other when launched via ``blender --python``."""
+    script_dir = str(Path(__file__).resolve().parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
+
+def setup_blender_logging(level: str = "INFO") -> None:
+    """Configure a basic console logger for Blender scripts."""
+    numeric = getattr(logging, level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=numeric,
+        format="[%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scene helpers
+# ---------------------------------------------------------------------------
+
+def clean_scene() -> None:
+    """Remove every object, material, image, and orphan data-block."""
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    log.info("Scene cleaned (factory-empty).")
+
+
+def import_obj(filepath: str) -> list[bpy.types.Object]:
+    """Import a Wavefront .obj file and return the newly created mesh objects.
+
+    Args:
+        filepath: Absolute path to the ``.obj`` file.
+
+    Returns:
+        List of imported mesh objects.
+    """
+    before = set(bpy.data.objects)
+
+    if bpy.app.version >= (3, 4, 0):
+        bpy.ops.wm.obj_import(filepath=filepath)
+    else:
+        bpy.ops.import_scene.obj(filepath=filepath)
+
+    after = set(bpy.data.objects)
+    new_objs = [o for o in (after - before) if o.type == "MESH"]
+
+    if not new_objs:
+        raise RuntimeError(f"No mesh objects imported from '{filepath}'.")
+
+    log.info("Imported %d mesh(es) from '%s'.", len(new_objs), filepath)
+    return new_objs
+
+
+def export_glb(filepath: str) -> None:
+    """Export the current scene as a GLB file.
+
+    Args:
+        filepath: Destination ``.glb`` path.
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    bpy.ops.export_scene.gltf(
+        filepath=filepath,
+        export_format="GLB",
+        export_image_format="AUTO",
+        export_materials="EXPORT",
+        export_colors=True,
+        export_apply=True,
+        export_texcoords=True,
+        export_normals=True,
+        export_tangents=True,
+        export_yup=True,
+    )
+    log.info("Exported GLB -> '%s'.", filepath)
+
+
+# ---------------------------------------------------------------------------
+# Bounding-box utilities
+# ---------------------------------------------------------------------------
+
+def get_scene_bbox(objects: list[bpy.types.Object]) -> tuple[Vector, Vector, Vector, float]:
+    """Compute the axis-aligned bounding box for a list of mesh objects.
+
+    Args:
+        objects: Mesh objects to measure.
+
+    Returns:
+        Tuple of ``(center, bbox_min, bbox_max, diagonal_length)``.
+    """
+    all_coords: list[Vector] = []
+    for obj in objects:
+        matrix = obj.matrix_world
+        for corner in obj.bound_box:
+            all_coords.append(matrix @ Vector(corner))
+
+    if not all_coords:
+        return Vector((0, 0, 0)), Vector((0, 0, 0)), Vector((0, 0, 0)), 1.0
+
+    xs = [v.x for v in all_coords]
+    ys = [v.y for v in all_coords]
+    zs = [v.z for v in all_coords]
+
+    bbox_min = Vector((min(xs), min(ys), min(zs)))
+    bbox_max = Vector((max(xs), max(ys), max(zs)))
+    center = (bbox_min + bbox_max) / 2
+    diagonal = (bbox_max - bbox_min).length
+
+    return center, bbox_min, bbox_max, diagonal
+
+
+# ---------------------------------------------------------------------------
+# GLB validation (runs in a separate clean scene)
+# ---------------------------------------------------------------------------
+
+def validate_glb(glb_path: str) -> list[str]:
+    """Re-import a GLB in a fresh scene and verify material integrity.
+
+    Args:
+        glb_path: Path to the ``.glb`` file.
+
+    Returns:
+        List of error strings (empty = pass).
+    """
+    errors: list[str] = []
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=glb_path)
+
+    imported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    if not imported_meshes:
+        errors.append("No mesh objects found after re-importing GLB.")
+        return errors
+
+    for mat in bpy.data.materials:
+        if not mat.use_nodes:
+            errors.append(f"Material '{mat.name}': use_nodes is False.")
+            continue
+
+        nodes = mat.node_tree.nodes
+        bsdf_nodes = [n for n in nodes if n.type == "BSDF_PRINCIPLED"]
+        if not bsdf_nodes:
+            errors.append(f"Material '{mat.name}': no Principled BSDF node found.")
+            continue
+
+        bsdf = bsdf_nodes[0]
+        base_color_input = bsdf.inputs.get("Base Color")
+        if base_color_input is None or not base_color_input.links:
+            errors.append(f"Material '{mat.name}': Base Color input is not connected.")
+
+        tex_nodes = [n for n in nodes if n.type == "TEX_IMAGE"]
+        for tex in tex_nodes:
+            if tex.image is None:
+                errors.append(f"Material '{mat.name}': image node '{tex.name}' has no image.")
+            elif tex.image.packed_file is None:
+                errors.append(
+                    f"Material '{mat.name}': image '{tex.image.name}' is not packed into the GLB."
+                )
+
+    if errors:
+        log.warning("GLB validation found %d issue(s).", len(errors))
+    else:
+        log.info("GLB validation passed.")
+
+    return errors

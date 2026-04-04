@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "3d-asset-agent"
+version = "0.1.0"
+description = "Automated 3D asset processing pipeline – PBR texture matching, Blender material setup, and GLB export."
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+asset-agent = "asset_agent.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100

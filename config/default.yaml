@@ -1,0 +1,22 @@
+blender:
+  executable: "C:\\Program Files\\Blender Foundation\\Blender 4.0\\blender.exe"
+
+render:
+  engine: "CYCLES"
+  resolution: [1920, 1080]
+  samples: 128
+  denoise: true
+  film_transparent: true
+  gpu_enabled: true
+
+export:
+  format: "GLB"
+  apply_modifiers: true
+  export_tangents: true
+  image_format: "AUTO"
+
+validation:
+  enabled: true
+
+logging:
+  level: "INFO"
