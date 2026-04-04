@@ -121,7 +121,7 @@ class AssetAgent:
             denoise=cfg.render.denoise,
             film_transparent=cfg.render.film_transparent,
             gpu_enabled=cfg.render.gpu_enabled,
-            skip_validation=not cfg.validation.enabled,
+            skip_validation=(not cfg.validation.enabled) or (not textures_payload),
         )
 
         status = blender_result.get("status", "unknown")
