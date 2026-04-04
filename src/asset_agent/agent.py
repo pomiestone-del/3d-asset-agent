@@ -93,7 +93,7 @@ class AssetAgent:
         # 2. Match textures
         logger.info("[2/4] Matching textures in '%s'...", texture_dir)
         try:
-            texture_map = self.match_textures(texture_dir, model_name=model_name)
+            texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
             logger.info(
                 "  Matched channels: %s",
                 ", ".join(texture_map.channel_names) or "(none)",
@@ -157,18 +157,21 @@ class AssetAgent:
         texture_dir: Path,
         *,
         model_name: str | None = None,
+        obj_path: Path | None = None,
     ) -> TextureMap:
         """Scan a directory and classify textures into PBR channels.
 
         Args:
             texture_dir: Folder containing texture images.
             model_name: Optional model-name hint for disambiguation.
+            obj_path: Optional path to the ``.obj`` file used to locate
+                      the MTL for explicit texture declarations.
 
         Returns:
             ``TextureMap`` with matched channels.
         """
         matcher = create_matcher(model_name=model_name)
-        return matcher.match(texture_dir)
+        return matcher.match(texture_dir, obj_path=obj_path)
 
     # -- GLB validation (standalone) ----------------------------------------
 

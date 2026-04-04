@@ -430,3 +430,42 @@ class TestEdgeCases:
         assert result.orm is not None
         assert result.roughness is not None
         assert result.metallic is not None
+
+
+class TestMtlIntegration:
+    """TextureMatcher should use MTL-declared paths before falling back to regex."""
+
+    def test_mtl_declared_albedo_used_when_regex_fails(self, tmp_path):
+        """If regex can't find albedo but MTL has map_Kd, use the MTL path."""
+        tex = tmp_path / "weird_name_xyz.png"
+        tex.write_bytes(b"stub")
+
+        mtl = tmp_path / "model.mtl"
+        mtl.write_text(f"newmtl Mat\nmap_Kd {tex}\n", encoding="utf-8")
+
+        obj = tmp_path / "model.obj"
+        obj.write_text("mtllib model.mtl\nv 0 0 0\n", encoding="utf-8")
+
+        matcher = create_matcher(model_name="model")
+        result = matcher.match(tmp_path, obj_path=obj)
+        assert result.albedo is not None
+        assert result.albedo.path == tex
+
+    def test_regex_channels_fill_gaps_not_in_mtl(self, tmp_path):
+        """Channels absent from MTL should still be matched by regex."""
+        albedo = tmp_path / "model_diffuse.png"
+        normal = tmp_path / "model_normal.png"
+        albedo.write_bytes(b"stub")
+        normal.write_bytes(b"stub")
+
+        mtl = tmp_path / "model.mtl"
+        mtl.write_text(f"newmtl Mat\nmap_Kd {albedo}\n", encoding="utf-8")
+
+        obj = tmp_path / "model.obj"
+        obj.write_text("mtllib model.mtl\nv 0 0 0\n", encoding="utf-8")
+
+        matcher = create_matcher(model_name="model")
+        result = matcher.match(tmp_path, obj_path=obj)
+
+        assert result.albedo is not None
+        assert result.normal is not None

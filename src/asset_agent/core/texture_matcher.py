@@ -205,21 +205,57 @@ class TextureMatcher:
 
     # -- public API ---------------------------------------------------------
 
-    def match(self, texture_dir: Path, *, recursive: bool = True) -> TextureMap:
+    def match(
+        self,
+        texture_dir: Path,
+        *,
+        recursive: bool = True,
+        obj_path: Path | None = None,
+    ) -> TextureMap:
         """Scan *texture_dir* and return a fully-resolved ``TextureMap``.
+
+        MTL-declared textures take priority over regex matches.
 
         Args:
             texture_dir: Directory containing PBR textures.
             recursive: Descend into subdirectories.
+            obj_path: Optional path to the ``.obj`` file used to locate
+                      the MTL for explicit texture declarations.
 
         Returns:
             Populated ``TextureMap``.
 
         Raises:
-            MissingAlbedoError: If no Albedo texture is found.
+            MissingAlbedoError: If no Albedo texture is found by any method.
+        """
+        mtl_assignments: dict[str, Path] = {}
+        if obj_path is not None:
+            from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
+            mtl_file = find_mtl_for_obj(obj_path)
+            if mtl_file:
+                mtl_data = parse_mtl(mtl_file)
+                if len(mtl_data) == 1:
+                    mtl_assignments = next(iter(mtl_data.values()))
+                elif len(mtl_data) > 1:
+                    # Multi-material: merge all paths as hints (single-material call)
+                    for mat_channels in mtl_data.values():
+                        for ch, p in mat_channels.items():
+                            mtl_assignments.setdefault(ch, p)
+        return self._match_with_mtl(texture_dir, recursive=recursive, mtl_assignments=mtl_assignments)
+
+    def _match_with_mtl(
+        self,
+        texture_dir: Path,
+        *,
+        recursive: bool = True,
+        mtl_assignments: dict[str, Path] | None = None,
+    ) -> TextureMap:
+        """Run matching with optional pre-parsed MTL assignments injected.
+
+        MTL assignments take priority over regex matches.
         """
         images = collect_images(texture_dir, recursive=recursive)
-        if not images:
+        if not images and not mtl_assignments:
             logger.warning("No image files found in '%s'", texture_dir)
             raise MissingAlbedoError(str(texture_dir))
 
@@ -231,7 +267,6 @@ class TextureMatcher:
 
         candidates: dict[str, list[Path]] = {rule.name: [] for rule in self.rules}
         matched_files: set[Path] = set()
-        assigned_files: set[Path] = set()
 
         for image in images:
             stem = image.stem.lower()
@@ -239,12 +274,8 @@ class TextureMatcher:
                 if rule.pattern.search(stem):
                     candidates[rule.name].append(image)
                     matched_files.add(image)
-                    break  # first-match-wins across channels
+                    break
 
-        # Base-name inference: if no albedo candidate was found via regex,
-        # look for an unmatched image whose stem is the common prefix of
-        # files that *did* match other channels (e.g. "texture_pbr_20250901"
-        # when "texture_pbr_20250901_normal" matched normal).
         if not candidates.get("albedo"):
             inferred = self._infer_albedo(images, matched_files)
             if inferred:
@@ -252,41 +283,52 @@ class TextureMatcher:
                 logger.info("  albedo (inferred from base name) -> %s", inferred.name)
 
         texture_map = TextureMap()
+        assigned_files: set[Path] = set()
 
+        # MTL assignments win over regex
+        for channel, path in (mtl_assignments or {}).items():
+            rule = next((r for r in self.rules if r.name == channel), None)
+            color_space = rule.color_space if rule else "Non-Color"
+            is_gloss = channel == "roughness" and any(
+                kw in path.stem.lower() for kw in ["gloss", "glossiness", "shini"]
+            )
+            tm = TextureMatch(path=path, channel=channel, color_space=color_space, is_glossiness=is_gloss)
+            if hasattr(texture_map, channel) and channel != "extra":
+                setattr(texture_map, channel, tm)
+                assigned_files.add(path)
+                logger.info("  %-12s -> %s (MTL)", channel, path.name)
+
+        # Regex fills remaining channels
         for rule in self.rules:
+            if hasattr(texture_map, rule.name) and getattr(texture_map, rule.name) is not None:
+                continue
             hits = candidates[rule.name]
             if not hits:
-                if rule.required:
+                if rule.required and texture_map.albedo is None:
                     raise MissingAlbedoError(str(texture_dir))
                 if rule.name != "displacement":
                     logger.debug("No texture found for channel '%s'", rule.name)
                 continue
-
             chosen = _disambiguate(hits, self.model_name, self.format_priority)
             if chosen in assigned_files:
                 continue
             assigned_files.add(chosen)
-
             is_gloss = self._is_glossiness(chosen, rule)
-
             tm = TextureMatch(
-                path=chosen,
-                channel=rule.name,
-                color_space=rule.color_space,
-                is_glossiness=is_gloss,
+                path=chosen, channel=rule.name,
+                color_space=rule.color_space, is_glossiness=is_gloss,
             )
-
             if hasattr(texture_map, rule.name) and rule.name != "extra":
                 setattr(texture_map, rule.name, tm)
             else:
                 texture_map.extra[rule.name] = tm
-
             logger.info(
-                "  %-12s -> %s%s",
-                rule.name,
-                chosen.name,
+                "  %-12s -> %s%s", rule.name, chosen.name,
                 " (glossiness)" if is_gloss else "",
             )
+
+        if texture_map.albedo is None:
+            raise MissingAlbedoError(str(texture_dir))
 
         self._warn_missing(texture_map)
         return texture_map
