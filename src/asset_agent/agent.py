@@ -92,20 +92,44 @@ class AssetAgent:
 
         # 2. Match textures
         logger.info("[2/4] Matching textures in '%s'...", texture_dir)
-        try:
-            texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
+        from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
+        from asset_agent.exporters.glb_exporter import build_multi_textures_payload
+
+        mtl_path = find_mtl_for_obj(obj_path)
+        mtl_data = parse_mtl(mtl_path) if mtl_path else {}
+        is_multi = len(mtl_data) > 1
+
+        if is_multi:
+            material_names = list(mtl_data.keys())
             logger.info(
-                "  Matched channels: %s",
-                ", ".join(texture_map.channel_names) or "(none)",
+                "  Multi-material OBJ detected: %d materials (%s)",
+                len(material_names),
+                ", ".join(material_names),
             )
-        except MissingAlbedoError:
-            logger.warning("  No albedo texture found — will keep imported MTL materials.")
-            texture_map = TextureMap()
+            matcher = create_matcher(model_name=model_name)
+            material_maps = matcher.match_multi(
+                texture_dir,
+                material_names=material_names,
+                obj_path=obj_path,
+            )
+            matched_count = sum(1 for tm in material_maps.values() if tm.albedo is not None)
+            logger.info("  Matched %d/%d materials with albedo.", matched_count, len(material_names))
+            textures_payload = build_multi_textures_payload(material_maps)
+        else:
+            try:
+                texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
+                logger.info(
+                    "  Matched channels: %s",
+                    ", ".join(texture_map.channel_names) or "(none)",
+                )
+            except MissingAlbedoError:
+                logger.warning("  No albedo texture found — will keep imported MTL materials.")
+                texture_map = TextureMap()
+            textures_payload = build_textures_payload(texture_map.as_dict())
 
         # 3. Run Blender pipeline
         logger.info("[3/4] Running Blender pipeline...")
         ensure_directory(output_dir)
-        textures_payload = build_textures_payload(texture_map.as_dict())
 
         cfg = self.config
         blender_result = run_process_asset(
