@@ -35,7 +35,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Process a 3D asset: import, apply PBR textures, render, export GLB.",
     )
-    parser.add_argument("--obj", required=True, help="Path to the .obj model file.")
+    parser.add_argument("--model", default=None, help="Path to the model file (.obj or .fbx).")
+    parser.add_argument("--obj", default=None, dest="model", help=argparse.SUPPRESS)
     parser.add_argument(
         "--textures-json",
         required=True,
@@ -69,7 +70,10 @@ def _parse_args() -> argparse.Namespace:
         help="Skip processing; only validate the given GLB file.",
     )
 
-    return parser.parse_args(custom_args)
+    args = parser.parse_args(custom_args)
+    if not args.validate_only and not args.model:
+        parser.error("--model (or --obj) is required")
+    return args
 
 
 def _load_textures_json(raw: str) -> list[dict]:
@@ -93,7 +97,7 @@ def main() -> int:
         clean_scene,
         export_glb,
         get_scene_bbox,
-        import_obj,
+        import_model,
         setup_blender_logging,
         validate_glb,
     )
@@ -136,9 +140,9 @@ def main() -> int:
         log.info("=== Step 1/6: Clean scene ===")
         clean_scene()
 
-        # 2. Import OBJ
-        log.info("=== Step 2/6: Import OBJ '%s' ===", args.obj)
-        mesh_objects = import_obj(args.obj)
+        # 2. Import model
+        log.info("=== Step 2/6: Import model '%s' ===", args.model)
+        mesh_objects = import_model(args.model)
 
         # 3. Build material (or keep imported MTL materials if no textures)
         if textures:

@@ -49,30 +49,32 @@ def clean_scene() -> None:
     log.info("Scene cleaned (factory-empty).")
 
 
-def import_obj(filepath: str) -> list[bpy.types.Object]:
-    """Import a Wavefront .obj file and return the newly created mesh objects.
-
-    Args:
-        filepath: Absolute path to the ``.obj`` file.
-
-    Returns:
-        List of imported mesh objects.
-    """
+def import_model(filepath: str) -> list[bpy.types.Object]:
+    """Import a 3D model file (.obj or .fbx) and return new mesh objects."""
+    ext = Path(filepath).suffix.lower()
     before = set(bpy.data.objects)
 
-    if bpy.app.version >= (3, 4, 0):
-        bpy.ops.wm.obj_import(filepath=filepath)
+    if ext == ".obj":
+        if bpy.app.version >= (3, 4, 0):
+            bpy.ops.wm.obj_import(filepath=filepath)
+        else:
+            bpy.ops.import_scene.obj(filepath=filepath)
+    elif ext == ".fbx":
+        bpy.ops.import_scene.fbx(filepath=filepath)
     else:
-        bpy.ops.import_scene.obj(filepath=filepath)
+        raise RuntimeError(f"Unsupported model format: '{ext}'. Supported: .obj, .fbx")
 
     after = set(bpy.data.objects)
     new_objs = [o for o in (after - before) if o.type == "MESH"]
-
     if not new_objs:
         raise RuntimeError(f"No mesh objects imported from '{filepath}'.")
-
     log.info("Imported %d mesh(es) from '%s'.", len(new_objs), filepath)
     return new_objs
+
+
+def import_obj(filepath: str) -> list[bpy.types.Object]:
+    """Backward-compatible alias for import_model()."""
+    return import_model(filepath)
 
 
 def export_glb(filepath: str) -> None:
