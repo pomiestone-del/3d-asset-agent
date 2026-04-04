@@ -44,6 +44,8 @@ def process(
     output: Path = typer.Option(..., "--output", help="Output directory for GLB and preview PNG."),
     config: Optional[Path] = typer.Option(None, "--config", exists=True, dir_okay=False, help="Override config YAML."),
     model_name: Optional[str] = typer.Option(None, "--model-name", help="Base name for output files (defaults to OBJ stem)."),
+    samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
+    resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
 ) -> None:
     """Run the full processing pipeline: match textures, build material, render, export GLB."""
     setup_logging()
@@ -53,6 +55,17 @@ def process(
         raise typer.Exit(code=1)
 
     agent = AssetAgent(config_path=config)
+
+    if samples is not None:
+        agent.config.render.samples = samples
+    if resolution is not None:
+        try:
+            w, h = resolution.lower().split("x")
+            agent.config.render.resolution = [int(w), int(h)]
+        except (ValueError, TypeError):
+            console.print(f"[red]Invalid resolution format: '{resolution}'. Use WxH, e.g. 1920x1080[/red]")
+            raise typer.Exit(code=1)
+
     result = agent.process(
         obj_path=obj,
         texture_dir=textures,
