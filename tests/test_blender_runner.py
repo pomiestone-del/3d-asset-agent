@@ -20,7 +20,7 @@ def test_subprocess_uses_utf8_encoding(tmp_path):
         with patch("asset_agent.core.blender_runner.find_blender", return_value="blender"):
             run_blender_script(tmp_path / "dummy.py", [], blender_path="blender")
 
-        call_kwargs = mock_run.call_args[1]
+        call_kwargs = mock_run.call_args.kwargs
         assert call_kwargs.get("encoding") == "utf-8", "encoding must be utf-8"
         assert call_kwargs.get("errors") == "replace", "errors must be replace"
 
@@ -36,5 +36,5 @@ def test_subprocess_uses_errors_replace(tmp_path):
         with patch("asset_agent.core.blender_runner.find_blender", return_value="blender"):
             run_blender_script(tmp_path / "dummy.py", [], blender_path="blender")
 
-        call_kwargs = mock_run.call_args[1]
+        call_kwargs = mock_run.call_args.kwargs
         assert call_kwargs.get("errors") == "replace"
