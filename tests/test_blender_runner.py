@@ -63,8 +63,9 @@ def test_skip_validation_when_no_textures(tmp_path):
         preview.write_bytes(b"dummy")
         return {"status": "pass", "glb": str(glb), "preview": str(preview)}
 
+    mock_importer = MagicMock()
     with patch("asset_agent.agent.run_process_asset", side_effect=fake_run_process):
-        with patch.object(agent._obj_importer, "validate_file"):
+        with patch.object(AssetAgent, "_get_importer", return_value=mock_importer):
             with patch.object(agent, "match_textures", side_effect=MissingAlbedoError(".")):
                 agent.process(obj_path, tmp_path, tmp_path)
 

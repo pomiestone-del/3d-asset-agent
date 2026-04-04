@@ -165,7 +165,7 @@ def run_process_asset(
     json_str = json.dumps(textures_json, ensure_ascii=False)
 
     args: list[str] = [
-        "--obj", str(obj_path.resolve()),
+        "--model", str(obj_path.resolve()),
         "--textures-json", json_str,
         "--output-dir", str(output_dir.resolve()),
         "--model-name", model_name,

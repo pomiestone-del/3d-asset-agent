@@ -35,7 +35,11 @@ console = Console()
 
 @app.command()
 def process(
-    obj: Path = typer.Option(..., "--obj", exists=True, dir_okay=False, help="Path to the .obj model file."),
+    obj: Path = typer.Option(
+        ..., "--obj",
+        exists=True, dir_okay=False,
+        help="Path to the model file (.obj or .fbx).",
+    ),
     textures: Path = typer.Option(..., "--textures", exists=True, file_okay=False, help="Directory containing PBR textures."),
     output: Path = typer.Option(..., "--output", help="Output directory for GLB and preview PNG."),
     config: Optional[Path] = typer.Option(None, "--config", exists=True, dir_okay=False, help="Override config YAML."),
@@ -43,6 +47,10 @@ def process(
 ) -> None:
     """Run the full processing pipeline: match textures, build material, render, export GLB."""
     setup_logging()
+
+    if obj.suffix.lower() not in {".obj", ".fbx"}:
+        console.print(f"[red]Unsupported format: {obj.suffix}. Supported: .obj, .fbx[/red]")
+        raise typer.Exit(code=1)
 
     agent = AssetAgent(config_path=config)
     result = agent.process(

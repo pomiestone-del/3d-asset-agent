@@ -14,7 +14,6 @@ from asset_agent.core.validator import ValidationResult
 from asset_agent.core.validator import validate_glb as _validate_glb
 from asset_agent.exceptions import MissingAlbedoError
 from asset_agent.exporters.glb_exporter import build_textures_payload
-from asset_agent.importers.obj_importer import ObjImporter
 from asset_agent.utils.config import AppConfig, load_config
 from asset_agent.utils.file_utils import ensure_directory
 from asset_agent.utils.logging import get_logger, setup_logging
@@ -58,7 +57,16 @@ class AssetAgent:
     def __init__(self, config_path: Path | None = None) -> None:
         self.config: AppConfig = load_config(config_path)
         setup_logging(self.config.logging.level)
-        self._obj_importer = ObjImporter()
+
+    @staticmethod
+    def _get_importer(model_path: Path):
+        """Return the appropriate importer based on file extension."""
+        from asset_agent.importers.fbx_importer import FbxImporter
+        from asset_agent.importers.obj_importer import ObjImporter
+        ext = model_path.suffix.lower()
+        if ext == ".fbx":
+            return FbxImporter()
+        return ObjImporter()
 
     # -- Full pipeline ------------------------------------------------------
 
@@ -88,7 +96,8 @@ class AssetAgent:
 
         # 1. Validate input file
         logger.info("[1/4] Validating input file...")
-        self._obj_importer.validate_file(obj_path)
+        importer = self._get_importer(obj_path)
+        importer.validate_file(obj_path)
 
         # 2. Match textures
         logger.info("[2/4] Matching textures in '%s'...", texture_dir)
@@ -98,6 +107,8 @@ class AssetAgent:
         mtl_path = find_mtl_for_obj(obj_path)
         mtl_data = parse_mtl(mtl_path) if mtl_path else {}
         is_multi = len(mtl_data) > 1
+
+        texture_map = None  # may remain None for multi-material models
 
         if is_multi:
             material_names = list(mtl_data.keys())
