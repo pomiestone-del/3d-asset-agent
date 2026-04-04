@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -92,28 +93,57 @@ def run_blender_script(
     logger.debug("Full command: %s", cmd)
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise BlenderNotFoundError(exe) from exc
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _read_stream(stream, buf: list[str], *, is_stderr: bool = False) -> None:
+        for line in stream:
+            buf.append(line)
+            stripped = line.rstrip("\n\r")
+            if is_stderr:
+                logger.debug("blender stderr: %s", stripped)
+            else:
+                logger.info("blender> %s", stripped)
+
+    t_out = threading.Thread(
+        target=_read_stream, args=(proc.stdout, stdout_lines), daemon=True,
+    )
+    t_err = threading.Thread(
+        target=_read_stream, args=(proc.stderr, stderr_lines),
+        kwargs={"is_stderr": True}, daemon=True,
+    )
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
         raise BlenderTimeoutError(timeout) from exc
 
-    if result.returncode not in (0, 2):
-        # 0 = success, 2 = validation-only failure (GLB exists but has issues)
-        raise BlenderExecutionError(result.stderr, result.returncode)
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
 
-    logger.debug("Blender stdout:\n%s", result.stdout[-2000:])
-    if result.stderr:
-        logger.debug("Blender stderr:\n%s", result.stderr[-2000:])
+    stdout_text = "".join(stdout_lines)
+    stderr_text = "".join(stderr_lines)
 
-    return result.stdout
+    if proc.returncode not in (0, 2):
+        raise BlenderExecutionError(stderr_text, proc.returncode)
+
+    return stdout_text
 
 
 # ---------------------------------------------------------------------------
