@@ -61,12 +61,8 @@ class AssetAgent:
     @staticmethod
     def _get_importer(model_path: Path):
         """Return the appropriate importer based on file extension."""
-        from asset_agent.importers.fbx_importer import FbxImporter
-        from asset_agent.importers.obj_importer import ObjImporter
-        ext = model_path.suffix.lower()
-        if ext == ".fbx":
-            return FbxImporter()
-        return ObjImporter()
+        from asset_agent.importers.generic_importer import GenericImporter
+        return GenericImporter()
 
     # -- Full pipeline ------------------------------------------------------
 
@@ -104,8 +100,12 @@ class AssetAgent:
         from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
         from asset_agent.exporters.glb_exporter import build_multi_textures_payload
 
-        mtl_path = find_mtl_for_obj(obj_path)
-        mtl_data = parse_mtl(mtl_path) if mtl_path else {}
+        # MTL parsing only applies to .obj files
+        if obj_path.suffix.lower() == ".obj":
+            mtl_path = find_mtl_for_obj(obj_path)
+            mtl_data = parse_mtl(mtl_path) if mtl_path else {}
+        else:
+            mtl_data = {}
         # Only count materials that have actual texture declarations;
         # color-only materials (Kd/Ks/Ns only) should not trigger multi-material mode.
         materials_with_textures = {k: v for k, v in mtl_data.items() if v}
@@ -231,7 +231,10 @@ class AssetAgent:
         input_dir: Path,
         output_dir: Path,
         *,
-        extensions: tuple[str, ...] = (".obj", ".fbx"),
+        extensions: tuple[str, ...] = (
+            ".obj", ".fbx", ".blend", ".gltf", ".glb",
+            ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
+        ),
     ) -> list[ProcessingResult]:
         """Discover and process all model files under *input_dir*.
 

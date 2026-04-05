@@ -49,8 +49,35 @@ def clean_scene() -> None:
     log.info("Scene cleaned (factory-empty).")
 
 
+def _append_from_blend(filepath: str) -> None:
+    """Append all mesh objects (with materials and images) from a .blend file."""
+    with bpy.data.libraries.load(filepath, link=False) as (data_from, data_to):
+        data_to.objects = data_from.objects
+        # Also pull in materials and images so textures are available
+        data_to.materials = data_from.materials
+        data_to.images = data_from.images
+
+    collection = bpy.context.collection
+    for obj in data_to.objects:
+        if obj is not None:
+            collection.objects.link(obj)
+            # Ensure the object's mesh data-block is local
+            if obj.data and obj.data.library:
+                obj.data = obj.data.copy()
+    log.info("Appended objects from '%s'.", filepath)
+
+
+_SUPPORTED_EXTENSIONS = {
+    ".obj", ".fbx", ".blend", ".gltf", ".glb",
+    ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
+}
+
+
 def import_model(filepath: str) -> list[bpy.types.Object]:
-    """Import a 3D model file (.obj or .fbx) and return new mesh objects."""
+    """Import a 3D model file and return new mesh objects.
+
+    Supported formats: OBJ, FBX, BLEND, glTF/GLB, STL, 3DS, DXF, X3D.
+    """
     ext = Path(filepath).suffix.lower()
     before = set(bpy.data.objects)
 
@@ -61,8 +88,40 @@ def import_model(filepath: str) -> list[bpy.types.Object]:
             bpy.ops.import_scene.obj(filepath=filepath)
     elif ext == ".fbx":
         bpy.ops.import_scene.fbx(filepath=filepath)
+    elif ext == ".blend":
+        _append_from_blend(filepath)
+    elif ext in (".gltf", ".glb"):
+        bpy.ops.import_scene.gltf(filepath=filepath)
+    elif ext == ".stl":
+        if bpy.app.version >= (3, 6, 0):
+            bpy.ops.wm.stl_import(filepath=filepath)
+        else:
+            bpy.ops.import_mesh.stl(filepath=filepath)
+    elif ext == ".3ds":
+        # Blender 4.0 uses the new importer
+        try:
+            bpy.ops.wm.autodesk_3ds_import(filepath=filepath)
+        except AttributeError:
+            bpy.ops.import_scene.autodesk_3ds(filepath=filepath)
+    elif ext == ".dxf":
+        try:
+            bpy.ops.import_scene.dxf(filepath=filepath)
+        except Exception as exc:
+            raise RuntimeError(
+                f"DXF import failed (addon may not be enabled): {exc}"
+            ) from exc
+    elif ext in (".x3d", ".x3dv"):
+        try:
+            bpy.ops.import_scene.x3d(filepath=filepath)
+        except Exception as exc:
+            raise RuntimeError(
+                f"X3D import failed (addon may not be enabled): {exc}"
+            ) from exc
     else:
-        raise RuntimeError(f"Unsupported model format: '{ext}'. Supported: .obj, .fbx")
+        raise RuntimeError(
+            f"Unsupported model format: '{ext}'. "
+            f"Supported: {', '.join(sorted(_SUPPORTED_EXTENSIONS))}"
+        )
 
     after = set(bpy.data.objects)
     new_objs = [o for o in (after - before) if o.type == "MESH"]

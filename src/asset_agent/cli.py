@@ -50,8 +50,9 @@ def process(
     """Run the full processing pipeline: match textures, build material, render, export GLB."""
     setup_logging()
 
-    if obj.suffix.lower() not in {".obj", ".fbx"}:
-        console.print(f"[red]Unsupported format: {obj.suffix}. Supported: .obj, .fbx[/red]")
+    from asset_agent.importers.generic_importer import _ALL_SUPPORTED
+    if obj.suffix.lower() not in _ALL_SUPPORTED:
+        console.print(f"[red]Unsupported format: {obj.suffix}. Supported: {', '.join(sorted(_ALL_SUPPORTED))}[/red]")
         raise typer.Exit(code=1)
 
     agent = AssetAgent(config_path=config)
