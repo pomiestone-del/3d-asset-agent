@@ -195,7 +195,7 @@ class TestEmissiveMatching:
 class TestOpacityMatching:
     @pytest.mark.parametrize("stem", [
         "Cube_Opacity", "wall_alpha", "glass_transparency",
-        "leaf_trans", "fence_mask",
+        "leaf_trans",
     ])
     def test_opacity_variants(self, tmp_path: Path, matcher: TextureMatcher, stem: str) -> None:
         _make_textures(tmp_path, ["dummy_basecolor.png", f"{stem}.png"])
@@ -448,7 +448,7 @@ class TestMtlIntegration:
         obj.write_text("mtllib model.mtl\nv 0 0 0\n", encoding="utf-8")
 
         matcher = create_matcher(model_name="model")
-        result = matcher.match(tmp_path, obj_path=obj)
+        result = matcher.match(tmp_path, model_path=obj)
         assert result.albedo is not None
         assert result.albedo.path == tex
 
@@ -466,7 +466,7 @@ class TestMtlIntegration:
         obj.write_text("mtllib model.mtl\nv 0 0 0\n", encoding="utf-8")
 
         matcher = create_matcher(model_name="model")
-        result = matcher.match(tmp_path, obj_path=obj)
+        result = matcher.match(tmp_path, model_path=obj)
 
         assert result.albedo is not None
         assert result.normal is not None

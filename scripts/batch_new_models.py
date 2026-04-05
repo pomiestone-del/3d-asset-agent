@@ -110,7 +110,7 @@ def main() -> None:
 
         try:
             result = agent.process(
-                obj_path=asset["model"],
+                model_path=asset["model"],
                 texture_dir=asset["textures"],
                 output_dir=out_dir,
                 model_name=name,

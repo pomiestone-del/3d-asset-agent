@@ -151,7 +151,7 @@ def run_blender_script(
 # ---------------------------------------------------------------------------
 
 def run_process_asset(
-    obj_path: Path,
+    model_path: Path,
     textures_json: list[dict[str, Any]],
     output_dir: Path,
     *,
@@ -170,7 +170,7 @@ def run_process_asset(
     """Run the full asset-processing pipeline inside Blender.
 
     Args:
-        obj_path: Path to the ``.obj`` model.
+        model_path: Path to the 3D model file (.obj, .fbx, .blend, .gltf, etc.).
         textures_json: Texture descriptors (list of dicts).
         output_dir: Directory for GLB and preview outputs.
         model_name: Base name for output files.
@@ -195,7 +195,7 @@ def run_process_asset(
     json_str = json.dumps(textures_json, ensure_ascii=False)
 
     args: list[str] = [
-        "--model", str(obj_path.resolve()),
+        "--model", str(model_path.resolve()),
         "--textures-json", json_str,
         "--output-dir", str(output_dir.resolve()),
         "--model-name", model_name,

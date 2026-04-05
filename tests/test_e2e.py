@@ -73,7 +73,7 @@ class TestFullPipeline:
         textures_payload = _build_textures_payload()
 
         result = run_process_asset(
-            obj_path=FIXTURES_DIR / "cube.obj",
+            model_path=FIXTURES_DIR / "cube.obj",
             textures_json=textures_payload,
             output_dir=tmp_path,
             model_name="Cube",
@@ -106,7 +106,7 @@ class TestFullPipeline:
         textures_payload = _build_textures_payload()
 
         result = run_process_asset(
-            obj_path=FIXTURES_DIR / "cube.obj",
+            model_path=FIXTURES_DIR / "cube.obj",
             textures_json=textures_payload,
             output_dir=tmp_path,
             model_name="CubeNoVal",
@@ -143,7 +143,7 @@ class TestAssetAgentProcess:
         agent.config.render.gpu_enabled = False
 
         result = agent.process(
-            obj_path=FIXTURES_DIR / "cube.obj",
+            model_path=FIXTURES_DIR / "cube.obj",
             texture_dir=TEXTURES_DIR,
             output_dir=tmp_path,
             model_name="CubeAgent",
@@ -162,7 +162,7 @@ class TestAssetAgentProcess:
         agent = AssetAgent()
         with pytest.raises(Exception):
             agent.process(
-                obj_path=Path("nonexistent.obj"),
+                model_path=Path("nonexistent.obj"),
                 texture_dir=TEXTURES_DIR,
                 output_dir=tmp_path,
             )
@@ -185,7 +185,7 @@ class TestAssetAgentValidate:
         agent.config.render.gpu_enabled = False
 
         proc = agent.process(
-            obj_path=FIXTURES_DIR / "cube.obj",
+            model_path=FIXTURES_DIR / "cube.obj",
             texture_dir=TEXTURES_DIR,
             output_dir=tmp_path,
             model_name="ValCube",

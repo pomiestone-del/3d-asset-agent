@@ -2,7 +2,7 @@
 
 Provides three sub-commands::
 
-    asset-agent process  --obj <path> --textures <dir> --output <dir>
+    asset-agent process  --model <path> --textures <dir> --output <dir>
     asset-agent match    --textures <dir> [--model-name <name>]
     asset-agent validate --glb <path>
 """
@@ -35,15 +35,15 @@ console = Console()
 
 @app.command()
 def process(
-    obj: Path = typer.Option(
-        ..., "--obj",
+    model: Path = typer.Option(
+        ..., "--model",
         exists=True, dir_okay=False,
-        help="Path to the model file (.obj or .fbx).",
+        help="Path to the 3D model file (.obj, .fbx, .blend, .gltf, .glb, .stl, etc.).",
     ),
     textures: Path = typer.Option(..., "--textures", exists=True, file_okay=False, help="Directory containing PBR textures."),
     output: Path = typer.Option(..., "--output", help="Output directory for GLB and preview PNG."),
     config: Optional[Path] = typer.Option(None, "--config", exists=True, dir_okay=False, help="Override config YAML."),
-    model_name: Optional[str] = typer.Option(None, "--model-name", help="Base name for output files (defaults to OBJ stem)."),
+    model_name: Optional[str] = typer.Option(None, "--model-name", help="Base name for output files (defaults to model stem)."),
     samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
     resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
 ) -> None:
@@ -51,8 +51,8 @@ def process(
     setup_logging()
 
     from asset_agent.importers.generic_importer import _ALL_SUPPORTED
-    if obj.suffix.lower() not in _ALL_SUPPORTED:
-        console.print(f"[red]Unsupported format: {obj.suffix}. Supported: {', '.join(sorted(_ALL_SUPPORTED))}[/red]")
+    if model.suffix.lower() not in _ALL_SUPPORTED:
+        console.print(f"[red]Unsupported format: {model.suffix}. Supported: {', '.join(sorted(_ALL_SUPPORTED))}[/red]")
         raise typer.Exit(code=1)
 
     agent = AssetAgent(config_path=config)
@@ -68,7 +68,7 @@ def process(
             raise typer.Exit(code=1)
 
     result = agent.process(
-        obj_path=obj,
+        model_path=model,
         texture_dir=textures,
         output_dir=output,
         model_name=model_name,
@@ -99,7 +99,7 @@ def batch(
     samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
     resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
 ) -> None:
-    """Batch-process all model files (.obj, .fbx) found under input-dir."""
+    """Batch-process all supported 3D model files found under input-dir."""
     setup_logging()
 
     agent = AssetAgent(config_path=config)

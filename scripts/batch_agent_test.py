@@ -36,13 +36,13 @@ def main() -> None:
         out_dir = OUTPUT / name
         print(f"\n{'='*60}")
         print(f"  Processing: {name}")
-        print(f"  OBJ:      {asset['obj']}")
+        print(f"  Model:    {asset['obj']}")
         print(f"  Textures: {asset['textures']}")
         print(f"  Output:   {out_dir}")
         print(f"{'='*60}\n")
 
         result = agent.process(
-            obj_path=asset["obj"],
+            model_path=asset["obj"],
             texture_dir=asset["textures"],
             output_dir=out_dir,
             model_name=name,

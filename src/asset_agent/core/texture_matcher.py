@@ -219,7 +219,7 @@ class TextureMatcher:
         texture_dir: Path,
         *,
         recursive: bool = True,
-        obj_path: Path | None = None,
+        model_path: Path | None = None,
     ) -> TextureMap:
         """Scan *texture_dir* and return a fully-resolved ``TextureMap``.
 
@@ -228,8 +228,8 @@ class TextureMatcher:
         Args:
             texture_dir: Directory containing PBR textures.
             recursive: Descend into subdirectories.
-            obj_path: Optional path to the ``.obj`` file used to locate
-                      the MTL for explicit texture declarations.
+            model_path: Optional path to the model file. For ``.obj`` files
+                        the MTL is parsed for explicit texture declarations.
 
         Returns:
             Populated ``TextureMap``.
@@ -238,9 +238,9 @@ class TextureMatcher:
             MissingAlbedoError: If no Albedo texture is found by any method.
         """
         mtl_assignments: dict[str, Path] = {}
-        if obj_path is not None:
+        if model_path is not None and model_path.suffix.lower() == ".obj":
             from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
-            mtl_file = find_mtl_for_obj(obj_path)
+            mtl_file = find_mtl_for_obj(model_path)
             if mtl_file:
                 mtl_data = parse_mtl(mtl_file)
                 if len(mtl_data) == 1:
@@ -258,7 +258,7 @@ class TextureMatcher:
         material_names: list[str],
         *,
         recursive: bool = True,
-        obj_path: Path | None = None,
+        model_path: Path | None = None,
     ) -> dict[str, TextureMap]:
         """Match textures independently for each material name.
 
@@ -269,16 +269,17 @@ class TextureMatcher:
             texture_dir: Folder containing PBR textures.
             material_names: List of material names (from MTL ``newmtl``).
             recursive: Descend into sub-directories.
-            obj_path: Optional OBJ path for MTL first-pass per material.
+            model_path: Optional model path. For ``.obj`` files the MTL is
+                        parsed for per-material texture hints.
 
         Returns:
             ``{material_name: TextureMap}`` for every name in *material_names*.
         """
         # Pre-parse MTL once for all materials
         mtl_per_material: dict[str, dict[str, Path]] = {}
-        if obj_path is not None:
+        if model_path is not None and model_path.suffix.lower() == ".obj":
             from asset_agent.core.mtl_parser import find_mtl_for_obj, parse_mtl
-            mtl_file = find_mtl_for_obj(obj_path)
+            mtl_file = find_mtl_for_obj(model_path)
             if mtl_file:
                 mtl_per_material = parse_mtl(mtl_file)
 

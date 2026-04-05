@@ -68,7 +68,7 @@ class AssetAgent:
 
     def process(
         self,
-        obj_path: Path,
+        model_path: Path,
         texture_dir: Path,
         output_dir: Path,
         *,
@@ -77,23 +77,23 @@ class AssetAgent:
         """Run the complete processing pipeline.
 
         Args:
-            obj_path: Path to the ``.obj`` white-model file.
+            model_path: Path to the 3D model file (.obj, .fbx, .blend, .gltf, etc.).
             texture_dir: Directory containing PBR texture images.
             output_dir: Where to write GLB and preview PNG.
-            model_name: Basename for outputs. Defaults to the OBJ stem.
+            model_name: Basename for outputs. Defaults to the model stem.
 
         Returns:
             ``ProcessingResult`` summarizing success, output paths, and errors.
         """
         if model_name is None:
-            model_name = obj_path.stem
+            model_name = model_path.stem
 
         logger.info("=== Asset Agent: processing '%s' ===", model_name)
 
         # 1. Validate input file
         logger.info("[1/4] Validating input file...")
-        importer = self._get_importer(obj_path)
-        importer.validate_file(obj_path)
+        importer = self._get_importer(model_path)
+        importer.validate_file(model_path)
 
         # 2. Match textures
         logger.info("[2/4] Matching textures in '%s'...", texture_dir)
@@ -101,8 +101,8 @@ class AssetAgent:
         from asset_agent.exporters.glb_exporter import build_multi_textures_payload
 
         # MTL parsing only applies to .obj files
-        if obj_path.suffix.lower() == ".obj":
-            mtl_path = find_mtl_for_obj(obj_path)
+        if model_path.suffix.lower() == ".obj":
+            mtl_path = find_mtl_for_obj(model_path)
             mtl_data = parse_mtl(mtl_path) if mtl_path else {}
         else:
             mtl_data = {}
@@ -124,7 +124,7 @@ class AssetAgent:
             material_maps = matcher.match_multi(
                 texture_dir,
                 material_names=material_names,
-                obj_path=obj_path,
+                model_path=model_path,
             )
             matched_count = sum(1 for tm in material_maps.values() if tm.albedo is not None)
             logger.info("  Matched %d/%d materials with albedo.", matched_count, len(material_names))
@@ -145,7 +145,7 @@ class AssetAgent:
                 material_maps = matcher.match_multi(
                     texture_dir,
                     material_names=material_sets,
-                    obj_path=obj_path,
+                    model_path=model_path,
                 )
                 matched_count = sum(
                     1 for tm in material_maps.values() if tm.albedo is not None
@@ -159,7 +159,7 @@ class AssetAgent:
                     entry["assign_by_name"] = True
             else:
                 try:
-                    texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
+                    texture_map = self.match_textures(texture_dir, model_name=model_name, model_path=model_path)
                     logger.info(
                         "  Matched channels: %s",
                         ", ".join(texture_map.channel_names) or "(none)",
@@ -175,7 +175,7 @@ class AssetAgent:
 
         cfg = self.config
         blender_result = run_process_asset(
-            obj_path=obj_path,
+            model_path=model_path,
             textures_json=textures_payload,
             output_dir=output_dir,
             model_name=model_name,
@@ -223,21 +223,21 @@ class AssetAgent:
         texture_dir: Path,
         *,
         model_name: str | None = None,
-        obj_path: Path | None = None,
+        model_path: Path | None = None,
     ) -> TextureMap:
         """Scan a directory and classify textures into PBR channels.
 
         Args:
             texture_dir: Folder containing texture images.
             model_name: Optional model-name hint for disambiguation.
-            obj_path: Optional path to the ``.obj`` file used to locate
-                      the MTL for explicit texture declarations.
+            model_path: Optional path to the model file. For ``.obj`` files
+                        the MTL is parsed for explicit texture declarations.
 
         Returns:
             ``TextureMap`` with matched channels.
         """
         matcher = create_matcher(model_name=model_name)
-        return matcher.match(texture_dir, obj_path=obj_path)
+        return matcher.match(texture_dir, model_path=model_path)
 
     # -- Batch processing ---------------------------------------------------
 
@@ -298,7 +298,7 @@ class AssetAgent:
 
             try:
                 result = self.process(
-                    obj_path=model_path,
+                    model_path=model_path,
                     texture_dir=texture_dir,
                     output_dir=model_output,
                     model_name=name,
