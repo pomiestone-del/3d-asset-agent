@@ -369,12 +369,29 @@ class TextureMatcher:
                     logger.debug("No texture found for channel '%s'", rule.name)
                 continue
 
-            # Directory affinity: if albedo was picked from a subdirectory,
-            # prefer candidates from that same directory for other channels.
-            if albedo_dir is not None and rule.name != "albedo" and len(hits) > 1:
+            # Directory affinity: when albedo lives in a proper subdirectory
+            # (not the scan root), restrict other channels to that same dir.
+            # This prevents cross-directory mixing (e.g. thatch opacity mask
+            # applied to a planks albedo).
+            if (
+                albedo_dir is not None
+                and rule.name != "albedo"
+                and albedo_dir != texture_dir
+            ):
                 colocated = [h for h in hits if h.parent == albedo_dir]
                 if colocated:
                     hits = colocated
+                elif len(hits) > 1:
+                    # Multiple candidates from other dirs — skip ambiguous match
+                    continue
+                else:
+                    # Single candidate from a different dir — skip it; it likely
+                    # belongs to a different material set.
+                    logger.debug(
+                        "Skipping '%s' for channel '%s' (different dir than albedo)",
+                        hits[0].name, rule.name,
+                    )
+                    continue
 
             chosen = _disambiguate(hits, self.model_name, self.format_priority)
             if chosen in assigned_files:

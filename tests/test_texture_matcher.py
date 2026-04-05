@@ -556,8 +556,8 @@ class TestDirectoryAffinity:
         assert result.roughness is not None
         assert result.roughness.path.parent.name == "planks"
 
-    def test_no_affinity_when_single_candidate(self, tmp_path):
-        """If a channel has only one candidate, it should still be selected even if in a different dir."""
+    def test_skips_cross_dir_when_albedo_in_subdir(self, tmp_path):
+        """Single candidate from a different subdir should be skipped — it belongs to another material."""
         _make_textures(tmp_path, [
             "planks/boards_bc.png",
             "other/boards_normal.png",
@@ -566,8 +566,22 @@ class TestDirectoryAffinity:
         result = matcher.match(tmp_path)
 
         assert result.albedo is not None
+        assert result.albedo.path.parent.name == "planks"
+        # Normal is in a different subdir → skipped
+        assert result.normal is None
+
+    def test_no_affinity_when_albedo_in_root(self, tmp_path):
+        """When albedo is in the root scan dir, no filtering — all candidates valid."""
+        _make_textures(tmp_path, [
+            "model_bc.png",
+            "subdir/model_normal.png",
+        ])
+        matcher = create_matcher()
+        result = matcher.match(tmp_path)
+
+        assert result.albedo is not None
         assert result.normal is not None
-        assert result.normal.path.parent.name == "other"
+        assert result.normal.path.parent.name == "subdir"
 
     def test_opacity_not_mixed_from_different_dir(self, tmp_path):
         """Opacity mask from a different directory should not be picked when co-located candidates exist."""
