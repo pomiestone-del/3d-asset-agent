@@ -7,10 +7,14 @@ Launch with::
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 import streamlit as st
+
+load_dotenv()
 
 from asset_agent.agent import AssetAgent, ProcessingResult
 from asset_agent.utils.slack import send_slack_notification
@@ -31,8 +35,8 @@ with st.sidebar:
 
     slack_webhook = st.text_input(
         "Slack Webhook URL",
-        type="password",
-        help="Incoming Webhook URL for task notifications. Leave blank to disable.",
+        value=os.environ.get("SLACK_WEBHOOK_URL", ""),
+        help="Pre-filled from SLACK_WEBHOOK_URL env var. Leave blank to disable.",
     )
 
     st.subheader("Render")
