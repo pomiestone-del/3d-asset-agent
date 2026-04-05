@@ -69,34 +69,20 @@ def _notify_slack(name: str, success: bool, elapsed: float, **kwargs):
 # Helpers — scan for models
 # ---------------------------------------------------------------------------
 
-def _scan_models(root: Path) -> list[dict]:
-    """Scan root directory for model files, pairing each with its texture dir.
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".tga", ".tiff", ".tif", ".exr", ".bmp"}
 
-    Expected layout (model + textures in same folder or textures/ subfolder):
-        root/
-        ├── Chair/
-        │   ├── chair.obj
-        │   ├── chair_basecolor.png
-        │   └── chair_normal.png
-        ├── Table/
-        │   ├── table.fbx
-        │   └── textures/
-        │       ├── table_diffuse.png
-        │       └── table_roughness.png
-    """
+
+def _scan_models(root: Path) -> list[dict]:
+    """Scan root directory for model files, pairing each with its texture dir."""
     found = []
     for p in sorted(root.rglob("*")):
         if not p.is_file() or p.suffix.lower() not in _ALL_SUPPORTED:
             continue
         texture_dir = AssetAgent._discover_texture_dir(p)
-
-        # Count image files in texture dir
-        img_exts = {".png", ".jpg", ".jpeg", ".tga", ".tiff", ".tif", ".exr", ".bmp"}
         tex_count = sum(
             1 for f in texture_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in img_exts
+            if f.is_file() and f.suffix.lower() in _IMG_EXTS
         )
-
         found.append({
             "name": p.stem,
             "model": p,
@@ -107,74 +93,145 @@ def _scan_models(root: Path) -> list[dict]:
     return found
 
 
-# ---------------------------------------------------------------------------
-# Tab layout
-# ---------------------------------------------------------------------------
+def _run_batch(models: list[dict], output_base: Path):
+    """Process a list of scanned models and display results."""
+    agent = _make_agent()
+    total = len(models)
+    bar = st.progress(0, text=f"0/{total}")
+    results_area = st.container()
+    t0 = time.time()
 
-tab_single, tab_batch = st.tabs(["Single Model", "Batch Processing"])
+    batch_results: list[tuple[str, ProcessingResult]] = []
 
-# ---------------------------------------------------------------------------
-# Tab 1 — Single model
-# ---------------------------------------------------------------------------
+    for i, m in enumerate(models):
+        bar.progress(i / total, text=f"{i}/{total} — {m['name']}...")
+        model_out = output_base / m["name"]
+        try:
+            result = agent.process(
+                model_path=m["model"],
+                texture_dir=m["texture_dir"],
+                output_dir=model_out,
+                model_name=m["name"],
+            )
+        except Exception as exc:
+            result = ProcessingResult(success=False, errors=[str(exc)])
 
-with tab_single:
-    model_path_str = st.text_input(
-        "Model file path",
-        placeholder=r"D:\models\Chair\chair.obj",
-        help="Supports: " + ", ".join(sorted(_ALL_SUPPORTED)),
-    )
-
-    auto_tex = st.checkbox(
-        "Auto-detect textures from model folder",
-        value=True,
-        help="Looks for textures/ subfolder, then falls back to the model's parent directory.",
-    )
-
-    if auto_tex:
-        if model_path_str and Path(model_path_str).is_file():
-            detected = AssetAgent._discover_texture_dir(Path(model_path_str))
-            st.caption(f"Texture dir: `{detected}`")
-        texture_dir_str = ""
-    else:
-        texture_dir_str = st.text_input(
-            "Textures directory",
-            placeholder=r"D:\models\Chair\textures",
-        )
-
-    output_dir_str = st.text_input(
-        "Output directory",
-        placeholder=r"D:\models\output",
-    )
-
-    model_name = st.text_input(
-        "Model name (optional)",
-        help="Base name for output files. Defaults to model filename stem.",
-    )
-
-    if st.button("Start Processing", type="primary", use_container_width=True):
-        errors = []
-        if not model_path_str:
-            errors.append("Model file path is required.")
-        elif not Path(model_path_str).is_file():
-            errors.append(f"Model file not found: {model_path_str}")
-        if not auto_tex and not texture_dir_str:
-            errors.append("Textures directory is required.")
-        elif not auto_tex and not Path(texture_dir_str).is_dir():
-            errors.append(f"Textures directory not found: {texture_dir_str}")
-        if not output_dir_str:
-            errors.append("Output directory is required.")
-
-        if errors:
-            for e in errors:
-                st.error(e)
-        else:
-            model_path = Path(model_path_str)
-            if auto_tex:
-                texture_dir = AssetAgent._discover_texture_dir(model_path)
+        batch_results.append((m["name"], result))
+        with results_area:
+            if result.success:
+                st.success(m["name"])
             else:
-                texture_dir = Path(texture_dir_str)
+                st.error(f"{m['name']}: {'; '.join(result.errors[:2])}")
+
+    elapsed = time.time() - t0
+    bar.progress(1.0, text="Done!")
+
+    passed = sum(1 for _, r in batch_results if r.success)
+    st.info(f"**{passed}/{total}** succeeded in {elapsed:.1f}s")
+
+    # Preview grid
+    success_results = [
+        (n, r) for n, r in batch_results
+        if r.success and r.preview_path and r.preview_path.exists()
+    ]
+    if success_results:
+        st.subheader("Previews")
+        cols = st.columns(min(len(success_results), 4))
+        for idx, (name, r) in enumerate(success_results):
+            with cols[idx % 4]:
+                st.image(str(r.preview_path), caption=name, use_container_width=True)
+
+    _notify_slack(
+        f"Batch ({passed}/{total})", passed == total, elapsed,
+        errors=[f"{total - passed} failed"] if passed < total else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main UI — single input path (file or folder)
+# ---------------------------------------------------------------------------
+
+st.markdown(
+    "Input a **folder** (auto-scans for models + textures) "
+    "or a **model file** path. "
+    f"Supported formats: `{', '.join(sorted(_ALL_SUPPORTED))}`"
+)
+
+input_path_str = st.text_input(
+    "Model file or folder",
+    placeholder=r"C:\Users\Pomie\Downloads\AgentTest",
+)
+
+output_dir_str = st.text_input(
+    "Output folder",
+    placeholder=r"C:\Users\Pomie\Downloads\AgentTest\output",
+)
+
+# ---------------------------------------------------------------------------
+# Detect input type and show preview
+# ---------------------------------------------------------------------------
+
+input_path = Path(input_path_str) if input_path_str else None
+is_dir = input_path is not None and input_path.is_dir()
+is_file = input_path is not None and input_path.is_file()
+
+if is_dir:
+    models = _scan_models(input_path)
+    if models:
+        st.markdown(f"Found **{len(models)}** model(s):")
+        import pandas as pd
+        df = pd.DataFrame([
+            {
+                "Name": m["name"],
+                "Format": m["format"],
+                "Textures": m["tex_count"],
+                "Texture Dir": str(m["texture_dir"]),
+            }
+            for m in models
+        ])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    elif input_path_str:
+        st.warning("No model files found in this folder.")
+
+elif is_file:
+    if input_path.suffix.lower() in _ALL_SUPPORTED:
+        tex_dir = AssetAgent._discover_texture_dir(input_path)
+        tex_count = sum(
+            1 for f in tex_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in _IMG_EXTS
+        )
+        st.caption(
+            f"Model: `{input_path.name}` ({input_path.suffix}) | "
+            f"Textures: {tex_count} files in `{tex_dir}`"
+        )
+    else:
+        st.error(f"Unsupported format: {input_path.suffix}")
+
+elif input_path_str:
+    st.error(f"Path not found: {input_path_str}")
+
+# ---------------------------------------------------------------------------
+# Process button
+# ---------------------------------------------------------------------------
+
+if st.button("Start Processing", type="primary", use_container_width=True):
+    if not input_path_str:
+        st.error("Please enter a model file or folder path.")
+    elif not output_dir_str:
+        st.error("Please enter an output folder.")
+    elif is_dir:
+        models = _scan_models(input_path)
+        if not models:
+            st.error("No model files found.")
+        else:
+            _run_batch(models, Path(output_dir_str))
+    elif is_file:
+        if input_path.suffix.lower() not in _ALL_SUPPORTED:
+            st.error(f"Unsupported format: {input_path.suffix}")
+        else:
+            tex_dir = AssetAgent._discover_texture_dir(input_path)
             output_dir = Path(output_dir_str)
-            name = model_name.strip() or model_path.stem
+            name = input_path.stem
 
             progress = st.progress(0, text="Initializing...")
             t0 = time.time()
@@ -184,9 +241,9 @@ with tab_single:
                 agent = _make_agent()
 
                 progress.progress(20, text="Running Blender pipeline...")
-                result: ProcessingResult = agent.process(
-                    model_path=model_path,
-                    texture_dir=texture_dir,
+                result = agent.process(
+                    model_path=input_path,
+                    texture_dir=tex_dir,
                     output_dir=output_dir,
                     model_name=name,
                 )
@@ -209,122 +266,16 @@ with tab_single:
                     for err in result.errors:
                         st.warning(err)
 
-                _notify_slack(name, result.success, elapsed,
-                              glb_path=str(result.glb_path) if result.glb_path else None,
-                              errors=result.errors)
+                _notify_slack(
+                    name, result.success, elapsed,
+                    glb_path=str(result.glb_path) if result.glb_path else None,
+                    errors=result.errors,
+                )
 
             except Exception as exc:
                 elapsed = time.time() - t0
                 progress.progress(100, text="Error!")
                 st.error(f"Fatal error: {exc}")
                 _notify_slack(name, False, elapsed, errors=[str(exc)])
-
-
-# ---------------------------------------------------------------------------
-# Tab 2 — Batch processing
-# ---------------------------------------------------------------------------
-
-with tab_batch:
-    st.markdown(
-        "Scan a root folder for all 3D models. "
-        "Textures are auto-detected from each model's folder "
-        "(looks for `textures/` subfolder, then same directory)."
-    )
-
-    bcol1, bcol2 = st.columns(2)
-    with bcol1:
-        batch_root = st.text_input(
-            "Root folder (contains model subfolders)",
-            placeholder=r"D:\models",
-            key="batch_root",
-        )
-    with bcol2:
-        batch_output = st.text_input(
-            "Output folder",
-            placeholder=r"D:\models\output",
-            key="batch_out",
-        )
-
-    # --- Scan and preview ---
-    if batch_root and Path(batch_root).is_dir():
-        models = _scan_models(Path(batch_root))
-
-        if models:
-            st.markdown(f"**Found {len(models)} model(s):**")
-
-            import pandas as pd
-            df = pd.DataFrame([
-                {
-                    "Name": m["name"],
-                    "Format": m["format"],
-                    "Textures": m["tex_count"],
-                    "Texture Dir": str(m["texture_dir"]),
-                    "Model Path": str(m["model"]),
-                }
-                for m in models
-            ])
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # --- Process all ---
-            if st.button("Process All", type="primary", use_container_width=True):
-                if not batch_output:
-                    st.error("Output folder is required.")
-                else:
-                    output_base = Path(batch_output)
-                    agent = _make_agent()
-                    total = len(models)
-                    bar = st.progress(0, text=f"0/{total}")
-                    results_area = st.container()
-                    t0 = time.time()
-
-                    batch_results: list[tuple[str, ProcessingResult]] = []
-
-                    for i, m in enumerate(models):
-                        bar.progress(
-                            (i) / total,
-                            text=f"{i}/{total} — processing {m['name']}...",
-                        )
-                        model_out = output_base / m["name"]
-                        try:
-                            result = agent.process(
-                                model_path=m["model"],
-                                texture_dir=m["texture_dir"],
-                                output_dir=model_out,
-                                model_name=m["name"],
-                            )
-                        except Exception as exc:
-                            result = ProcessingResult(success=False, errors=[str(exc)])
-
-                        batch_results.append((m["name"], result))
-
-                        with results_area:
-                            if result.success:
-                                st.success(f"{m['name']}")
-                            else:
-                                st.error(f"{m['name']}: {'; '.join(result.errors[:2])}")
-
-                    elapsed = time.time() - t0
-                    bar.progress(1.0, text="Done!")
-
-                    passed = sum(1 for _, r in batch_results if r.success)
-                    st.info(f"**Batch complete:** {passed}/{total} succeeded in {elapsed:.1f}s")
-
-                    # Show previews for successful models
-                    success_results = [(n, r) for n, r in batch_results if r.success and r.preview_path and r.preview_path.exists()]
-                    if success_results:
-                        st.subheader("Previews")
-                        cols = st.columns(min(len(success_results), 4))
-                        for idx, (name, r) in enumerate(success_results):
-                            with cols[idx % 4]:
-                                st.image(str(r.preview_path), caption=name, use_container_width=True)
-
-                    _notify_slack(
-                        f"Batch ({passed}/{total})",
-                        passed == total,
-                        elapsed,
-                        errors=[f"{total - passed} failed"] if passed < total else None,
-                    )
-        else:
-            st.warning("No model files found in this directory.")
-    elif batch_root:
-        st.error(f"Directory not found: {batch_root}")
+    else:
+        st.error(f"Path not found: {input_path_str}")
