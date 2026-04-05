@@ -526,3 +526,59 @@ class TestBuildMultiTexturesPayload:
         tm = TextureMap(albedo=TextureMatch(path=tex, channel="albedo", color_space="sRGB"))
         payload = build_textures_payload(tm.as_dict())
         assert all("material" not in entry for entry in payload)
+
+
+class TestDirectoryAffinity:
+    """When textures span multiple subdirectories, prefer co-located textures."""
+
+    def test_prefers_same_directory_as_albedo(self, tmp_path):
+        """Normal/roughness from albedo's dir should win over other dirs."""
+        # planks/ has albedo + roughness
+        _make_textures(tmp_path, [
+            "planks/boards_and_planks_bc.png",
+            "planks/boards_and_planks_roughness.png",
+        ])
+        # boards/ has roughness only
+        _make_textures(tmp_path, [
+            "boards/tiled_dirty_planks_roughness.png",
+        ])
+        # thatch/ has an unrelated opacity mask
+        _make_textures(tmp_path, [
+            "thatch/thatch_opacity_mask.png",
+        ])
+
+        matcher = create_matcher()
+        result = matcher.match(tmp_path)
+
+        assert result.albedo is not None
+        assert result.albedo.path.parent.name == "planks"
+        # Roughness should come from same dir as albedo
+        assert result.roughness is not None
+        assert result.roughness.path.parent.name == "planks"
+
+    def test_no_affinity_when_single_candidate(self, tmp_path):
+        """If a channel has only one candidate, it should still be selected even if in a different dir."""
+        _make_textures(tmp_path, [
+            "planks/boards_bc.png",
+            "other/boards_normal.png",
+        ])
+        matcher = create_matcher()
+        result = matcher.match(tmp_path)
+
+        assert result.albedo is not None
+        assert result.normal is not None
+        assert result.normal.path.parent.name == "other"
+
+    def test_opacity_not_mixed_from_different_dir(self, tmp_path):
+        """Opacity mask from a different directory should not be picked when co-located candidates exist."""
+        _make_textures(tmp_path, [
+            "planks/boards_and_planks_bc.png",
+            "planks/boards_and_planks_roughness.png",
+            "planks/boards_and_planks_opacity.png",
+            "thatch/thatch_opacity_mask.png",
+        ])
+        matcher = create_matcher()
+        result = matcher.match(tmp_path)
+
+        assert result.opacity is not None
+        assert result.opacity.path.parent.name == "planks"

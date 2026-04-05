@@ -349,7 +349,15 @@ class TextureMatcher:
                 assigned_files.add(path)
                 logger.info("  %-12s -> %s (MTL)", channel, path.name)
 
-        # Regex fills remaining channels
+        # Regex fills remaining channels.
+        # First pass: resolve albedo so we can determine directory affinity.
+        albedo_dir: Path | None = None
+        if texture_map.albedo is not None:
+            albedo_dir = texture_map.albedo.path.parent
+        elif candidates.get("albedo"):
+            albedo_pick = _disambiguate(candidates["albedo"], self.model_name, self.format_priority)
+            albedo_dir = albedo_pick.parent
+
         for rule in self.rules:
             if hasattr(texture_map, rule.name) and getattr(texture_map, rule.name) is not None:
                 continue
@@ -360,6 +368,14 @@ class TextureMatcher:
                 if rule.name != "displacement":
                     logger.debug("No texture found for channel '%s'", rule.name)
                 continue
+
+            # Directory affinity: if albedo was picked from a subdirectory,
+            # prefer candidates from that same directory for other channels.
+            if albedo_dir is not None and rule.name != "albedo" and len(hits) > 1:
+                colocated = [h for h in hits if h.parent == albedo_dir]
+                if colocated:
+                    hits = colocated
+
             chosen = _disambiguate(hits, self.model_name, self.format_priority)
             if chosen in assigned_files:
                 continue
