@@ -106,6 +106,7 @@ def _run_batch(models: list[dict], output_base: Path):
     for i, m in enumerate(models):
         bar.progress(i / total, text=f"{i}/{total} — {m['name']}...")
         model_out = output_base / m["name"]
+        item_t0 = time.time()
         try:
             result = agent.process(
                 model_path=m["model"],
@@ -116,12 +117,21 @@ def _run_batch(models: list[dict], output_base: Path):
         except Exception as exc:
             result = ProcessingResult(success=False, errors=[str(exc)])
 
+        item_elapsed = time.time() - item_t0
         batch_results.append((m["name"], result))
+
         with results_area:
             if result.success:
-                st.success(m["name"])
+                st.success(f"{m['name']}  ({item_elapsed:.1f}s)")
             else:
                 st.error(f"{m['name']}: {'; '.join(result.errors[:2])}")
+
+        # Per-model Slack notification
+        _notify_slack(
+            m["name"], result.success, item_elapsed,
+            glb_path=str(result.glb_path) if result.glb_path else None,
+            errors=result.errors,
+        )
 
     elapsed = time.time() - t0
     bar.progress(1.0, text="Done!")
@@ -141,8 +151,9 @@ def _run_batch(models: list[dict], output_base: Path):
             with cols[idx % 4]:
                 st.image(str(r.preview_path), caption=name, use_container_width=True)
 
+    # Batch summary notification
     _notify_slack(
-        f"Batch ({passed}/{total})", passed == total, elapsed,
+        f"Batch done: {passed}/{total}", passed == total, elapsed,
         errors=[f"{total - passed} failed"] if passed < total else None,
     )
 
