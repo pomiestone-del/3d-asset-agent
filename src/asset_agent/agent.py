@@ -208,6 +208,77 @@ class AssetAgent:
         matcher = create_matcher(model_name=model_name)
         return matcher.match(texture_dir, obj_path=obj_path)
 
+    # -- Batch processing ---------------------------------------------------
+
+    @staticmethod
+    def _discover_texture_dir(model_path: Path) -> Path:
+        """Heuristic to find the texture directory for a model file.
+
+        Checks (in order):
+        1. A sibling ``textures/`` subdirectory
+        2. The model file's parent directory itself
+        """
+        textures_subdir = model_path.parent / "textures"
+        if textures_subdir.is_dir():
+            return textures_subdir
+        return model_path.parent
+
+    def batch_process(
+        self,
+        input_dir: Path,
+        output_dir: Path,
+        *,
+        extensions: tuple[str, ...] = (".obj", ".fbx"),
+    ) -> list[ProcessingResult]:
+        """Discover and process all model files under *input_dir*.
+
+        For each model found, textures are resolved via
+        ``_discover_texture_dir`` and outputs go to a per-model subfolder
+        under *output_dir*.
+
+        Args:
+            input_dir: Root directory to scan (recursive).
+            output_dir: Base output directory.
+            extensions: File extensions to consider as models.
+
+        Returns:
+            List of ``ProcessingResult`` — one per model file found.
+        """
+        model_files = sorted(
+            p for p in input_dir.rglob("*")
+            if p.suffix.lower() in extensions and p.is_file()
+        )
+
+        if not model_files:
+            logger.warning("No model files found in '%s'", input_dir)
+            return []
+
+        logger.info("Batch: found %d model(s) in '%s'", len(model_files), input_dir)
+        results: list[ProcessingResult] = []
+
+        for model_path in model_files:
+            name = model_path.stem
+            texture_dir = self._discover_texture_dir(model_path)
+            model_output = output_dir / name
+            logger.info("--- Batch item: %s ---", name)
+
+            try:
+                result = self.process(
+                    obj_path=model_path,
+                    texture_dir=texture_dir,
+                    output_dir=model_output,
+                    model_name=name,
+                )
+            except Exception as exc:
+                logger.error("Batch item '%s' failed: %s", name, exc)
+                result = ProcessingResult(success=False, errors=[str(exc)])
+
+            results.append(result)
+
+        passed = sum(1 for r in results if r.success)
+        logger.info("Batch complete: %d/%d succeeded", passed, len(results))
+        return results
+
     # -- GLB validation (standalone) ----------------------------------------
 
     def validate(self, glb_path: Path) -> ValidationResult:

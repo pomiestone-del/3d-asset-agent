@@ -87,6 +87,64 @@ def process(
 
 
 # ---------------------------------------------------------------------------
+# batch
+# ---------------------------------------------------------------------------
+
+@app.command()
+def batch(
+    input_dir: Path = typer.Option(..., "--input-dir", exists=True, file_okay=False, help="Root directory to scan for model files."),
+    output_dir: Path = typer.Option(..., "--output-dir", help="Base output directory (per-model subfolders created)."),
+    config: Optional[Path] = typer.Option(None, "--config", exists=True, dir_okay=False, help="Override config YAML."),
+    samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
+    resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
+) -> None:
+    """Batch-process all model files (.obj, .fbx) found under input-dir."""
+    setup_logging()
+
+    agent = AssetAgent(config_path=config)
+
+    if samples is not None:
+        agent.config.render.samples = samples
+    if resolution is not None:
+        try:
+            w, h = resolution.lower().split("x")
+            agent.config.render.resolution = [int(w), int(h)]
+        except (ValueError, TypeError):
+            console.print(f"[red]Invalid resolution format: '{resolution}'. Use WxH, e.g. 1920x1080[/red]")
+            raise typer.Exit(code=1)
+
+    results = agent.batch_process(input_dir, output_dir)
+
+    if not results:
+        console.print("[yellow]No model files found.[/yellow]")
+        raise typer.Exit(code=0)
+
+    # Summary table
+    table = Table(title="Batch Results", show_lines=True)
+    table.add_column("Model", style="cyan")
+    table.add_column("Status", style="white")
+    table.add_column("GLB", style="green")
+    table.add_column("Errors", style="red")
+
+    failures = 0
+    for r in results:
+        status = "[green]OK[/green]" if r.success else "[red]FAIL[/red]"
+        glb = str(r.glb_path.name) if r.glb_path else "-"
+        errs = "; ".join(r.errors[:2]) if r.errors else "-"
+        name = r.glb_path.stem if r.glb_path else "(unknown)"
+        table.add_row(name, status, glb, errs)
+        if not r.success:
+            failures += 1
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[bold]{len(results)} processed, {failures} failed.[/bold]")
+
+    if failures:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
 # match
 # ---------------------------------------------------------------------------
 
