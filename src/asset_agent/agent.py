@@ -106,7 +106,10 @@ class AssetAgent:
 
         mtl_path = find_mtl_for_obj(obj_path)
         mtl_data = parse_mtl(mtl_path) if mtl_path else {}
-        is_multi = len(mtl_data) > 1
+        # Only count materials that have actual texture declarations;
+        # color-only materials (Kd/Ks/Ns only) should not trigger multi-material mode.
+        materials_with_textures = {k: v for k, v in mtl_data.items() if v}
+        is_multi = len(materials_with_textures) > 1
 
         texture_map = None  # may remain None for multi-material models
 

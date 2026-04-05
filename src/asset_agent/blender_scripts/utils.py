@@ -168,11 +168,15 @@ def validate_glb(glb_path: str) -> list[str]:
             continue
 
         bsdf = bsdf_nodes[0]
-        base_color_input = bsdf.inputs.get("Base Color")
-        if base_color_input is None or not base_color_input.links:
-            errors.append(f"Material '{mat.name}': Base Color input is not connected.")
-
         tex_nodes = [n for n in nodes if n.type == "TEX_IMAGE"]
+
+        # Only require Base Color link if the material has texture nodes;
+        # color-only materials (from MTL Kd/Ks) use default_value instead.
+        if tex_nodes:
+            base_color_input = bsdf.inputs.get("Base Color")
+            if base_color_input is None or not base_color_input.links:
+                errors.append(f"Material '{mat.name}': Base Color input is not connected.")
+
         for tex in tex_nodes:
             if tex.image is None:
                 errors.append(f"Material '{mat.name}': image node '{tex.name}' has no image.")

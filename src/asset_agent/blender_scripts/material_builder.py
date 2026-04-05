@@ -135,6 +135,10 @@ def _build_multi_materials(
             by_mat.setdefault(key, []).append(t)
 
     for mat_name, mat_textures in by_mat.items():
+        if not mat_textures:
+            log.info("Material '%s' has no textures; preserving imported material.", mat_name)
+            continue
+
         existing = bpy.data.materials.get(mat_name)
         if existing is None:
             log.warning("Material '%s' not found in scene; creating new.", mat_name)
