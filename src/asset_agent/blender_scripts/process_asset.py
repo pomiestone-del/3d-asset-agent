@@ -84,6 +84,107 @@ def _load_textures_json(raw: str) -> list[dict]:
     return json.loads(raw)
 
 
+_METAL_COLOR_HINTS: dict[str, tuple[float, float, float]] = {
+    "gold":   (1.0, 0.766, 0.336),
+    "yellow": (1.0, 0.766, 0.336),
+    "silver": (0.972, 0.960, 0.915),
+    "white":  (0.972, 0.960, 0.915),
+    "copper": (0.955, 0.637, 0.538),
+    "bronze": (0.804, 0.584, 0.257),
+    "rose":   (0.942, 0.640, 0.540),
+    "iron":   (0.560, 0.570, 0.580),
+    "steel":  (0.630, 0.620, 0.600),
+}
+
+
+def _fix_broken_image_links(log: logging.Logger) -> None:
+    """Disconnect image texture nodes whose images failed to load.
+
+    After importing a model, some materials may reference external texture
+    files that don't exist on this machine.  These nodes produce black output
+    which makes the model look wrong.  Disconnecting them lets the Principled
+    BSDF default values (Base Color, etc.) show through instead.
+
+    For metallic materials, a fallback Base Color is inferred from the
+    material name (e.g. "Yellow Gold" → gold color) so mirrors don't
+    render as solid black.
+    """
+    import bpy  # type: ignore[import-unresolved]
+
+    fixed = 0
+    for mat in bpy.data.materials:
+        if not mat.use_nodes or mat.node_tree is None:
+            continue
+        for node in list(mat.node_tree.nodes):
+            if node.type != "TEX_IMAGE":
+                continue
+            img = node.image
+            if img is None:
+                continue
+            # Image is broken if it has zero dimensions (failed to load)
+            if img.size[0] == 0 and img.size[1] == 0:
+                # Track which BSDF inputs were connected
+                connected_inputs: list[str] = []
+                for output in node.outputs:
+                    for link in list(output.links):
+                        if link.to_node.type == "BSDF_PRINCIPLED":
+                            connected_inputs.append(link.to_socket.name)
+                        mat.node_tree.links.remove(link)
+
+                # Set fallback Base Color for metallic materials
+                if "Base Color" in connected_inputs:
+                    bsdf_nodes = [
+                        n for n in mat.node_tree.nodes
+                        if n.type == "BSDF_PRINCIPLED"
+                    ]
+                    for bsdf in bsdf_nodes:
+                        metallic_val = bsdf.inputs.get("Metallic")
+                        is_metallic = (
+                            metallic_val is not None
+                            and not metallic_val.links
+                            and metallic_val.default_value > 0.5
+                        )
+                        if is_metallic:
+                            color = _infer_metal_color(mat.name)
+                            bc = bsdf.inputs.get("Base Color")
+                            if bc is not None:
+                                bc.default_value = (*color, 1.0)
+                            # Bump roughness so it's not a perfect mirror
+                            rough = bsdf.inputs.get("Roughness")
+                            if rough and not rough.links and rough.default_value < 0.15:
+                                rough.default_value = 0.25
+                            log.info(
+                                "  Set fallback Base Color (%.2f,%.2f,%.2f) "
+                                "for metallic material '%s'.",
+                                *color, mat.name,
+                            )
+
+                log.info(
+                    "  Fixed broken image '%s' in material '%s'.",
+                    img.name, mat.name,
+                )
+                fixed += 1
+    if fixed:
+        log.info("  Disconnected %d broken image texture(s).", fixed)
+
+
+def _infer_metal_color(material_name: str) -> tuple[float, float, float]:
+    """Guess a metal Base Color from the material name.
+
+    Matches the keyword appearing earliest in the name so that
+    "White Gold" matches "white" (silver) rather than "gold".
+    """
+    name_lower = material_name.lower()
+    best_pos = len(name_lower)
+    best_color = (0.8, 0.8, 0.8)
+    for keyword, color in _METAL_COLOR_HINTS.items():
+        pos = name_lower.find(keyword)
+        if pos != -1 and pos < best_pos:
+            best_pos = pos
+            best_color = color
+    return best_color
+
+
 def main() -> int:
     """Run the full processing pipeline and return an exit code."""
     args = _parse_args()
@@ -144,7 +245,11 @@ def main() -> int:
         log.info("=== Step 2/6: Import model '%s' ===", args.model)
         mesh_objects = import_model(args.model)
 
+        # 2b. Fix broken image texture links (missing external files)
+        _fix_broken_image_links(log)
+
         # 3. Build material (or keep imported MTL materials if no textures)
+        has_opacity = any(t.get("channel") == "opacity" for t in textures)
         if textures:
             log.info("=== Step 3/6: Build PBR material (%d textures) ===", len(textures))
             build_material(mesh_objects, textures, material_name=args.model_name)
@@ -154,6 +259,14 @@ def main() -> int:
         # 4. Setup scene (lights, camera, render settings)
         log.info("=== Step 4/6: Setup scene ===")
         center, _, _, diagonal = get_scene_bbox(mesh_objects)
+
+        # Disable transparent film when model uses opacity to avoid
+        # invisible renders (transparent model on transparent background).
+        film_transparent = args.film_transparent
+        if has_opacity and film_transparent:
+            film_transparent = False
+            log.info("  Opacity texture detected; disabling transparent film.")
+
         setup_scene(
             center,
             diagonal,
@@ -161,7 +274,7 @@ def main() -> int:
             resolution=(args.render_width, args.render_height),
             samples=args.render_samples,
             denoise=args.denoise,
-            film_transparent=args.film_transparent,
+            film_transparent=film_transparent,
             gpu_enabled=args.gpu,
         )
 

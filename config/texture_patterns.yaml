@@ -31,7 +31,7 @@ channels:
     color_space: "sRGB"
 
   opacity:
-    pattern: "(opacity|alpha|transparency|trans(?![a-z])|mask)"
+    pattern: "(opacity|(?<![a-z])alpha(?![a-z])|transparency|trans(?![a-z]))(?!.*mask)"
     color_space: "Non-Color"
 
   displacement:

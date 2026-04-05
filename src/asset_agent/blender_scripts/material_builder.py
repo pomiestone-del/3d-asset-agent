@@ -10,6 +10,7 @@ Multi-material mode: textures entries have a "material" field — per-slot node 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import bpy  # type: ignore[import-unresolved]
@@ -51,7 +52,10 @@ def build_material(
         The ``bpy.types.Material`` in single-material mode, ``None`` in multi-material mode.
     """
     if any("material" in t for t in textures):
-        _build_multi_materials(objects, textures)
+        if any(t.get("assign_by_name") for t in textures):
+            _assign_materials_by_mesh_name(objects, textures)
+        else:
+            _build_multi_materials(objects, textures)
         return None
 
     mat = _build_single_material(material_name, textures)
@@ -201,6 +205,75 @@ def _copy_node_tree(
             in_sock = dst_in.inputs.get(lnk.to_socket.name)
             if out_sock and in_sock:
                 dst.links.new(out_sock, in_sock)
+
+
+def _assign_materials_by_mesh_name(
+    objects: list[bpy.types.Object],
+    textures: list[dict[str, Any]],
+) -> None:
+    """Create per-set materials and assign to mesh objects by name overlap.
+
+    Used when texture sets are auto-detected from the directory structure
+    (``assign_by_name`` flag) and material slots don't yet exist.
+    Each mesh object gets the material whose set name best matches its name.
+    """
+    # Group textures by set name (the "material" field)
+    by_set: dict[str, list[dict[str, Any]]] = {}
+    for t in textures:
+        key = t.get("material", "")
+        if key:
+            # Strip assign_by_name flag before building material
+            clean = {k: v for k, v in t.items() if k != "assign_by_name"}
+            by_set.setdefault(key, []).append(clean)
+
+    if not by_set:
+        return
+
+    # Build a PBR material for each texture set
+    set_materials: dict[str, bpy.types.Material] = {}
+    for set_name, set_textures in by_set.items():
+        if not set_textures:
+            continue
+        mat = _build_single_material(set_name, set_textures)
+        set_materials[set_name] = mat
+        log.info("  Built material '%s' (%d textures).", set_name, len(set_textures))
+
+    # Normalize name: strip trailing digits/separators for fuzzy comparison
+    def _norm(name: str) -> str:
+        return re.sub(r'[_\-\s]?\d+$', '', name.lower()).rstrip('_- ')
+
+    norm_sets = {_norm(k): k for k in set_materials}
+
+    # Assign materials to objects by longest common prefix match
+    assigned = 0
+    for obj in objects:
+        obj_norm = _norm(obj.name)
+        best_key = None
+        best_len = 0
+        for norm_set, orig_set in norm_sets.items():
+            cpl = _common_prefix_len(obj_norm, norm_set)
+            if cpl > best_len and cpl >= 4:
+                best_len = cpl
+                best_key = orig_set
+
+        if best_key is not None:
+            obj.data.materials.clear()
+            obj.data.materials.append(set_materials[best_key])
+            assigned += 1
+        # else: keep whatever material was imported
+
+    log.info(
+        "Name-based assignment: %d/%d objects matched to %d material set(s).",
+        assigned, len(objects), len(set_materials),
+    )
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    """Return the length of the longest common prefix of *a* and *b*."""
+    for i, (ca, cb) in enumerate(zip(a, b)):
+        if ca != cb:
+            return i
+    return min(len(a), len(b))
 
 
 # ---------------------------------------------------------------------------

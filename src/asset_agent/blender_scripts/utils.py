@@ -50,21 +50,23 @@ def clean_scene() -> None:
 
 
 def _append_from_blend(filepath: str) -> None:
-    """Append all mesh objects (with materials and images) from a .blend file."""
-    with bpy.data.libraries.load(filepath, link=False) as (data_from, data_to):
-        data_to.objects = data_from.objects
-        # Also pull in materials and images so textures are available
-        data_to.materials = data_from.materials
-        data_to.images = data_from.images
+    """Open a .blend file and collect its mesh objects.
 
-    collection = bpy.context.collection
-    for obj in data_to.objects:
-        if obj is not None:
-            collection.objects.link(obj)
-            # Ensure the object's mesh data-block is local
-            if obj.data and obj.data.library:
-                obj.data = obj.data.copy()
-    log.info("Appended objects from '%s'.", filepath)
+    Uses bpy.ops.wm.open_mainfile to handle all Blender versions and
+    compression formats (zstd).  After opening, we re-collect mesh objects.
+    """
+    try:
+        bpy.ops.wm.open_mainfile(filepath=filepath)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "not a blend file" in msg.lower():
+            raise RuntimeError(
+                f"Cannot open '{filepath}': the .blend file was likely created "
+                f"by a newer Blender version than {bpy.app.version_string}. "
+                f"Upgrade Blender or re-save the file in a compatible version."
+            ) from exc
+        raise
+    log.info("Opened blend file '%s'.", filepath)
 
 
 _SUPPORTED_EXTENSIONS = {
@@ -90,6 +92,13 @@ def import_model(filepath: str) -> list[bpy.types.Object]:
         bpy.ops.import_scene.fbx(filepath=filepath)
     elif ext == ".blend":
         _append_from_blend(filepath)
+        # open_mainfile replaces the scene, so diff-based detection won't work.
+        # Collect all mesh objects in the opened file directly.
+        new_objs = [o for o in bpy.data.objects if o.type == "MESH"]
+        if not new_objs:
+            raise RuntimeError(f"No mesh objects found in '{filepath}'.")
+        log.info("Imported %d mesh(es) from '%s'.", len(new_objs), filepath)
+        return new_objs
     elif ext in (".gltf", ".glb"):
         bpy.ops.import_scene.gltf(filepath=filepath)
     elif ext == ".stl":

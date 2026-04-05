@@ -152,17 +152,20 @@ def _disambiguate(
     candidates: list[Path],
     model_name: str | None,
     format_priority: list[str],
+    texture_dir: Path | None = None,
 ) -> Path:
     """Pick the best candidate when multiple files match a channel.
 
     Priority order:
       1. Filename contains the model name (case-insensitive).
-      2. Image format preference (``.png > .exr > .tga > ...``).
+      2. Prefer files at the texture directory root over subdirectories.
+      3. Image format preference (``.png > .exr > .tga > ...``).
 
     Args:
         candidates: List of matching file paths.
         model_name: Optional model name hint for tie-breaking.
         format_priority: Ordered list of preferred extensions.
+        texture_dir: Optional root scan directory — files here are preferred.
 
     Returns:
         The single best candidate.
@@ -177,6 +180,12 @@ def _disambiguate(
             return name_matches[0]
         if name_matches:
             candidates = name_matches
+
+    # Prefer files at the root of the texture directory over subdirectories
+    if texture_dir is not None and len(candidates) > 1:
+        root_candidates = [c for c in candidates if c.parent == texture_dir]
+        if root_candidates:
+            candidates = root_candidates
 
     priority_map = {ext: idx for idx, ext in enumerate(format_priority)}
     worst = len(format_priority)
@@ -355,7 +364,7 @@ class TextureMatcher:
         if texture_map.albedo is not None:
             albedo_dir = texture_map.albedo.path.parent
         elif candidates.get("albedo"):
-            albedo_pick = _disambiguate(candidates["albedo"], self.model_name, self.format_priority)
+            albedo_pick = _disambiguate(candidates["albedo"], self.model_name, self.format_priority, texture_dir)
             albedo_dir = albedo_pick.parent
 
         for rule in self.rules:
@@ -393,7 +402,7 @@ class TextureMatcher:
                     )
                     continue
 
-            chosen = _disambiguate(hits, self.model_name, self.format_priority)
+            chosen = _disambiguate(hits, self.model_name, self.format_priority, texture_dir)
             if chosen in assigned_files:
                 continue
             assigned_files.add(chosen)
@@ -464,6 +473,38 @@ class TextureMatcher:
                 return img
 
         return None
+
+    def detect_material_sets(self, texture_dir: Path) -> list[str]:
+        """Detect distinct PBR texture sets by finding multiple albedo files.
+
+        Extracts the filename prefix before the channel keyword for each
+        albedo-matching file.  Returns prefixes when 2+ distinct sets are found.
+
+        Args:
+            texture_dir: Directory containing textures.
+
+        Returns:
+            Sorted list of set prefixes (original case).
+            Empty list if fewer than 2 sets found.
+        """
+        images = collect_images(texture_dir, recursive=True)
+        albedo_rule = next((r for r in self.rules if r.name == "albedo"), None)
+        if albedo_rule is None:
+            return []
+
+        prefixes: dict[str, str] = {}  # lower -> original
+        for img in images:
+            stem = img.stem
+            m = albedo_rule.pattern.search(stem.lower())
+            if m:
+                raw_prefix = stem[: m.start()].rstrip("_- ")
+                if raw_prefix:
+                    prefixes.setdefault(raw_prefix.lower(), raw_prefix)
+
+        if len(prefixes) < 2:
+            return []
+
+        return sorted(prefixes.values())
 
     @staticmethod
     def _warn_missing(texture_map: TextureMap) -> None:

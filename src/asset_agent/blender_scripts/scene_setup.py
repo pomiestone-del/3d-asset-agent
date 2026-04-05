@@ -177,6 +177,19 @@ def _setup_render(
     render.image_settings.color_mode = "RGBA"
     render.film_transparent = film_transparent
 
+    # When film is NOT transparent (e.g. opacity models), use a neutral
+    # light-grey world background so the model is visible.
+    if not film_transparent:
+        world = bpy.data.worlds.get("World")
+        if world is None:
+            world = bpy.data.worlds.new("World")
+        scene.world = world
+        world.use_nodes = True
+        bg_node = world.node_tree.nodes.get("Background")
+        if bg_node:
+            bg_node.inputs["Color"].default_value = (0.85, 0.85, 0.85, 1.0)
+            bg_node.inputs["Strength"].default_value = 1.0
+
     if render.engine == "CYCLES":
         cycles = scene.cycles
         cycles.samples = samples

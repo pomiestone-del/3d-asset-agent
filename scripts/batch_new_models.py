@@ -84,8 +84,8 @@ ASSETS = [
     },
     {
         "name": "Emily",
-        "model": INPUT / "uploads_files_6890527_Emily" / "Emily 5.0.blend",
-        "textures": INPUT / "uploads_files_6890527_Emily",
+        "model": INPUT / "uploads_files_6890527_Emily" / "Emily" / "Emily 5.0.blend",
+        "textures": INPUT / "uploads_files_6890527_Emily" / "Emily" / "textures",
     },
 ]
 

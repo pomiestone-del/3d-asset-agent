@@ -130,16 +130,44 @@ class AssetAgent:
             logger.info("  Matched %d/%d materials with albedo.", matched_count, len(material_names))
             textures_payload = build_multi_textures_payload(material_maps)
         else:
-            try:
-                texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
+            # Check for auto multi-material: multiple texture sets detected
+            # by distinct albedo files (e.g. Chair_Diffuse, Table_Diffuse).
+            matcher = create_matcher(model_name=model_name)
+            material_sets = matcher.detect_material_sets(texture_dir)
+
+            if len(material_sets) > 1:
                 logger.info(
-                    "  Matched channels: %s",
-                    ", ".join(texture_map.channel_names) or "(none)",
+                    "  Auto-detected %d texture sets: %s",
+                    len(material_sets),
+                    ", ".join(material_sets[:8])
+                    + ("..." if len(material_sets) > 8 else ""),
                 )
-            except MissingAlbedoError:
-                logger.warning("  No albedo texture found — will keep imported MTL materials.")
-                texture_map = TextureMap()
-            textures_payload = build_textures_payload(texture_map.as_dict())
+                material_maps = matcher.match_multi(
+                    texture_dir,
+                    material_names=material_sets,
+                    obj_path=obj_path,
+                )
+                matched_count = sum(
+                    1 for tm in material_maps.values() if tm.albedo is not None
+                )
+                logger.info(
+                    "  Matched %d/%d sets with albedo.", matched_count, len(material_sets)
+                )
+                textures_payload = build_multi_textures_payload(material_maps)
+                # Flag entries for mesh-name-based assignment (no MTL slots)
+                for entry in textures_payload:
+                    entry["assign_by_name"] = True
+            else:
+                try:
+                    texture_map = self.match_textures(texture_dir, model_name=model_name, obj_path=obj_path)
+                    logger.info(
+                        "  Matched channels: %s",
+                        ", ".join(texture_map.channel_names) or "(none)",
+                    )
+                except MissingAlbedoError:
+                    logger.warning("  No albedo texture found — will keep imported MTL materials.")
+                    texture_map = TextureMap()
+                textures_payload = build_textures_payload(texture_map.as_dict())
 
         # 3. Run Blender pipeline
         logger.info("[3/4] Running Blender pipeline...")
