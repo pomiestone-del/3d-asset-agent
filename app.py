@@ -8,6 +8,7 @@ Launch with::
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -65,30 +66,64 @@ def _notify_slack(name: str, success: bool, elapsed: float, **kwargs):
         )
 
 
+def _open_folder(folder: Path):
+    """Open a folder in the system file explorer (Windows)."""
+    try:
+        os.startfile(str(folder))
+    except Exception:
+        subprocess.Popen(["explorer", str(folder)])
+
+
 # ---------------------------------------------------------------------------
-# Helpers — scan for models
+# Helpers — scan for models (deduplicated by folder)
 # ---------------------------------------------------------------------------
 
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".tga", ".tiff", ".tif", ".exr", ".bmp"}
 
+# Prefer formats in this order when multiple exist in the same folder
+_FORMAT_PRIORITY = [
+    ".fbx", ".blend", ".gltf", ".glb", ".obj",
+    ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
+]
+
 
 def _scan_models(root: Path) -> list[dict]:
-    """Scan root directory for model files, pairing each with its texture dir."""
-    found = []
+    """Scan root directory for model files, one per folder.
+
+    When a folder contains multiple model formats (e.g. both .fbx and .obj),
+    only the highest-priority format is kept.
+    """
+    # Group all model files by their parent folder
+    by_folder: dict[Path, list[Path]] = {}
     for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in _ALL_SUPPORTED:
-            continue
-        texture_dir = AssetAgent._discover_texture_dir(p)
+        if p.is_file() and p.suffix.lower() in _ALL_SUPPORTED:
+            by_folder.setdefault(p.parent, []).append(p)
+
+    found = []
+    for folder, files in sorted(by_folder.items()):
+        # Pick the best format per folder
+        best = min(files, key=lambda f: (
+            _FORMAT_PRIORITY.index(f.suffix.lower())
+            if f.suffix.lower() in _FORMAT_PRIORITY else 99
+        ))
+
+        texture_dir = AssetAgent._discover_texture_dir(best)
         tex_count = sum(
             1 for f in texture_dir.iterdir()
             if f.is_file() and f.suffix.lower() in _IMG_EXTS
         )
+
+        # Use folder name as display name (more intuitive than file stem)
+        display_name = folder.name if folder != root else best.stem
+
         found.append({
-            "name": p.stem,
-            "model": p,
+            "name": display_name,
+            "model": best,
             "texture_dir": texture_dir,
             "tex_count": tex_count,
-            "format": p.suffix.lower(),
+            "format": best.suffix.lower(),
+            "all_formats": sorted(set(f.suffix.lower() for f in files)),
+            "folder": folder,
         })
     return found
 
@@ -98,10 +133,9 @@ def _run_batch(models: list[dict], output_base: Path):
     agent = _make_agent()
     total = len(models)
     bar = st.progress(0, text=f"0/{total}")
-    results_area = st.container()
     t0 = time.time()
 
-    batch_results: list[tuple[str, ProcessingResult]] = []
+    batch_results: list[tuple[dict, ProcessingResult, float]] = []
 
     for i, m in enumerate(models):
         bar.progress(i / total, text=f"{i}/{total} — {m['name']}...")
@@ -118,13 +152,7 @@ def _run_batch(models: list[dict], output_base: Path):
             result = ProcessingResult(success=False, errors=[str(exc)])
 
         item_elapsed = time.time() - item_t0
-        batch_results.append((m["name"], result))
-
-        with results_area:
-            if result.success:
-                st.success(f"{m['name']}  ({item_elapsed:.1f}s)")
-            else:
-                st.error(f"{m['name']}: {'; '.join(result.errors[:2])}")
+        batch_results.append((m, result, item_elapsed))
 
         # Per-model Slack notification
         _notify_slack(
@@ -136,20 +164,51 @@ def _run_batch(models: list[dict], output_base: Path):
     elapsed = time.time() - t0
     bar.progress(1.0, text="Done!")
 
-    passed = sum(1 for _, r in batch_results if r.success)
+    passed = sum(1 for _, r, _ in batch_results if r.success)
     st.info(f"**{passed}/{total}** succeeded in {elapsed:.1f}s")
 
-    # Preview grid
-    success_results = [
-        (n, r) for n, r in batch_results
-        if r.success and r.preview_path and r.preview_path.exists()
-    ]
-    if success_results:
-        st.subheader("Previews")
-        cols = st.columns(min(len(success_results), 4))
-        for idx, (name, r) in enumerate(success_results):
-            with cols[idx % 4]:
-                st.image(str(r.preview_path), caption=name, use_container_width=True)
+    # --- Result cards with preview + open-folder button ---
+    st.subheader("Results")
+
+    for m, result, item_elapsed in batch_results:
+        output_folder = output_base / m["name"]
+
+        with st.container():
+            cols = st.columns([1, 3, 1])
+
+            # Preview image
+            with cols[0]:
+                if result.success and result.preview_path and result.preview_path.exists():
+                    st.image(str(result.preview_path), use_container_width=True)
+                elif result.success:
+                    st.markdown(":white_check_mark:")
+                else:
+                    st.markdown(":x:")
+
+            # Info
+            with cols[1]:
+                if result.success:
+                    st.markdown(
+                        f"**{m['name']}** &nbsp; `{m['format']}` "
+                        f"&nbsp; {item_elapsed:.1f}s"
+                    )
+                    if result.glb_path:
+                        st.caption(f"GLB: `{result.glb_path}`")
+                else:
+                    st.markdown(f"**{m['name']}** &nbsp; :red[FAILED]")
+                    st.caption("; ".join(result.errors[:2]))
+
+            # Open folder button
+            with cols[2]:
+                if output_folder.exists():
+                    st.button(
+                        ":open_file_folder: Open",
+                        key=f"open_{m['name']}",
+                        on_click=_open_folder,
+                        args=(output_folder,),
+                    )
+
+            st.divider()
 
     # Batch summary notification
     _notify_slack(
@@ -189,14 +248,15 @@ is_file = input_path is not None and input_path.is_file()
 if is_dir:
     models = _scan_models(input_path)
     if models:
-        st.markdown(f"Found **{len(models)}** model(s):")
+        st.markdown(f"Found **{len(models)}** model(s) (deduplicated by folder):")
         import pandas as pd
         df = pd.DataFrame([
             {
                 "Name": m["name"],
-                "Format": m["format"],
+                "Selected": m["format"],
+                "All Formats": ", ".join(m["all_formats"]),
                 "Textures": m["tex_count"],
-                "Texture Dir": str(m["texture_dir"]),
+                "Folder": str(m["folder"]),
             }
             for m in models
         ])
@@ -263,7 +323,7 @@ if st.button("Start Processing", type="primary", use_container_width=True):
 
                 if result.success:
                     st.success(f"Completed in {elapsed:.1f}s")
-                    c1, c2 = st.columns(2)
+                    c1, c2 = st.columns([1, 2])
                     with c1:
                         if result.preview_path and result.preview_path.exists():
                             st.image(str(result.preview_path), caption="Render Preview")
@@ -272,6 +332,12 @@ if st.button("Start Processing", type="primary", use_container_width=True):
                         st.metric("Time", f"{elapsed:.1f}s")
                         if result.glb_path:
                             st.code(str(result.glb_path), language=None)
+                        if output_dir.exists():
+                            st.button(
+                                ":open_file_folder: Open Output Folder",
+                                on_click=_open_folder,
+                                args=(output_dir,),
+                            )
                 else:
                     st.error(f"Failed after {elapsed:.1f}s")
                     for err in result.errors:
