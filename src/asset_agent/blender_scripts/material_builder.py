@@ -93,13 +93,14 @@ def _build_single_material(
     if "orm" in tex_by_channel:
         orm_info = tex_by_channel["orm"]
         orm_tex, y_cursor = _add_tex_image(nodes, orm_info, y_cursor)
-        orm_separate_node = nodes.new("ShaderNodeSeparateColor")
-        orm_separate_node.location = (_X_MID, y_cursor + _Y_STEP)
-        y_cursor += _Y_STEP
-        links.new(orm_tex.outputs["Color"], orm_separate_node.inputs["Color"])
-        links.new(orm_separate_node.outputs["Green"], bsdf.inputs["Roughness"])
-        links.new(orm_separate_node.outputs["Blue"], bsdf.inputs["Metallic"])
-        log.info("  ORM packed texture unpacked (R=AO, G=Rough, B=Metal).")
+        if orm_tex is not None:
+            orm_separate_node = nodes.new("ShaderNodeSeparateColor")
+            orm_separate_node.location = (_X_MID, y_cursor + _Y_STEP)
+            y_cursor += _Y_STEP
+            links.new(orm_tex.outputs["Color"], orm_separate_node.inputs["Color"])
+            links.new(orm_separate_node.outputs["Green"], bsdf.inputs["Roughness"])
+            links.new(orm_separate_node.outputs["Blue"], bsdf.inputs["Metallic"])
+            log.info("  ORM packed texture unpacked (R=AO, G=Rough, B=Metal).")
 
     for channel, connect_fn in _CHANNEL_WIRING.items():
         if channel == "orm":
@@ -210,10 +211,15 @@ def _add_tex_image(
     nodes: bpy.types.NodeTree,
     info: dict[str, Any],
     y_cursor: float,
-) -> tuple[bpy.types.ShaderNode, float]:
+) -> tuple[bpy.types.ShaderNode | None, float]:
     tex = nodes.new("ShaderNodeTexImage")
     tex.location = (_X_TEX, y_cursor)
-    img = bpy.data.images.load(info["path"], check_existing=True)
+    try:
+        img = bpy.data.images.load(info["path"], check_existing=True)
+    except RuntimeError:
+        log.warning("Cannot load texture '%s'; skipping.", info["path"])
+        nodes.remove(tex)
+        return None, y_cursor
     tex.image = img
     img.colorspace_settings.name = info.get("color_space", "Non-Color")
     tex.label = info["channel"]
@@ -222,6 +228,8 @@ def _add_tex_image(
 
 def _connect_albedo(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     log.info("  albedo -> Base Color (%s)", info["color_space"])
     return y_cursor + _Y_STEP
@@ -229,6 +237,8 @@ def _connect_albedo(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
 
 def _connect_normal(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     normal_map = nodes.new("ShaderNodeNormalMap")
     normal_map.location = (_X_MID, y_cursor)
     links.new(tex.outputs["Color"], normal_map.inputs["Color"])
@@ -242,6 +252,8 @@ def _connect_roughness(nodes, links, bsdf, info, y_cursor, orm_node) -> float:
         log.info("  roughness: skipped (ORM already connected).")
         return y_cursor
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     if info.get("is_glossiness"):
         invert = nodes.new("ShaderNodeInvert")
         invert.location = (_X_MID, y_cursor)
@@ -259,6 +271,8 @@ def _connect_metallic(nodes, links, bsdf, info, y_cursor, orm_node) -> float:
         log.info("  metallic: skipped (ORM already connected).")
         return y_cursor
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     links.new(tex.outputs["Color"], bsdf.inputs["Metallic"])
     log.info("  metallic -> Metallic")
     return y_cursor + _Y_STEP
@@ -266,6 +280,8 @@ def _connect_metallic(nodes, links, bsdf, info, y_cursor, orm_node) -> float:
 
 def _connect_ao(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     base_color_input = bsdf.inputs["Base Color"]
     if base_color_input.links:
         albedo_link = base_color_input.links[0]
@@ -287,6 +303,8 @@ def _connect_ao(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
 
 def _connect_emissive(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     emission_color_input = bsdf.inputs.get("Emission Color")
     if emission_color_input is None:
         emission_color_input = bsdf.inputs.get("Emission")
@@ -301,6 +319,8 @@ def _connect_emissive(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
 
 def _connect_opacity(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     links.new(tex.outputs["Color"], bsdf.inputs["Alpha"])
     log.info("  opacity -> Alpha")
     return y_cursor + _Y_STEP
@@ -308,6 +328,8 @@ def _connect_opacity(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
 
 def _connect_displacement(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
+    if tex is None:
+        return y_cursor
     disp_node = nodes.new("ShaderNodeDisplacement")
     disp_node.location = (_X_MID, y_cursor)
     disp_node.inputs["Scale"].default_value = 0.05
