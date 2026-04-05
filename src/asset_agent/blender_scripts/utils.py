@@ -68,6 +68,17 @@ def import_model(filepath: str) -> list[bpy.types.Object]:
     new_objs = [o for o in (after - before) if o.type == "MESH"]
     if not new_objs:
         raise RuntimeError(f"No mesh objects imported from '{filepath}'.")
+
+    # Recalculate normals to ensure consistent outward-facing orientation.
+    # Many OBJ files have inconsistent face winding, causing black renders
+    # (normals pointing inward) and see-through artifacts.
+    for obj in new_objs:
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode="OBJECT")
+
     log.info("Imported %d mesh(es) from '%s'.", len(new_objs), filepath)
     return new_objs
 
