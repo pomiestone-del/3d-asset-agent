@@ -82,15 +82,23 @@ def _add_area_light(
 
 
 def _setup_lights(center: Vector, diagonal: float) -> None:
-    """Create a Key / Fill / Rim three-point lighting rig."""
+    """Create a Key / Fill / Rim three-point lighting rig.
+
+    Light energy scales with ``diagonal ** 2`` to compensate for inverse-square
+    distance falloff, ensuring consistent illumination regardless of model size.
+    """
     dist = diagonal * 1.5
     size = diagonal * 0.6
+
+    # Energy scales with diagonal² to compensate for inverse-square falloff.
+    # Factors calibrated so diagonal=2 reproduces original linear formula.
+    d2 = diagonal * diagonal
 
     # Key light – upper-right-front
     _add_area_light(
         "Key",
         location=(center.x + dist, center.y - dist, center.z + dist * 0.8),
-        energy=diagonal * 150,
+        energy=d2 * 75,
         size=size,
         target=center,
     )
@@ -99,7 +107,7 @@ def _setup_lights(center: Vector, diagonal: float) -> None:
     _add_area_light(
         "Fill",
         location=(center.x - dist * 0.8, center.y - dist * 0.6, center.z + dist * 0.3),
-        energy=diagonal * 50,
+        energy=d2 * 25,
         size=size * 1.2,
         target=center,
     )
@@ -108,7 +116,7 @@ def _setup_lights(center: Vector, diagonal: float) -> None:
     _add_area_light(
         "Rim",
         location=(center.x, center.y + dist, center.z + dist * 0.6),
-        energy=diagonal * 100,
+        energy=d2 * 50,
         size=size * 0.8,
         target=center,
     )

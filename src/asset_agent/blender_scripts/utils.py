@@ -69,15 +69,23 @@ def import_model(filepath: str) -> list[bpy.types.Object]:
     if not new_objs:
         raise RuntimeError(f"No mesh objects imported from '{filepath}'.")
 
-    # Recalculate normals to ensure consistent outward-facing orientation.
-    # Many OBJ files have inconsistent face winding, causing black renders
-    # (normals pointing inward) and see-through artifacts.
+    # Fix normals: clear custom split normals from OBJ import (vn lines may
+    # be incorrect/inverted) and recalculate to ensure consistent outward
+    # orientation.  This fixes black renders and see-through artifacts.
     for obj in new_objs:
         bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+
+        # Clear custom split normals imported from OBJ vn data
+        if obj.data.has_custom_normals:
+            bpy.ops.mesh.customdata_custom_splitnormals_clear()
+            log.info("  Cleared custom split normals on '%s'.", obj.name)
+
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.normals_make_consistent(inside=False)
         bpy.ops.object.mode_set(mode="OBJECT")
+        obj.select_set(False)
 
     log.info("Imported %d mesh(es) from '%s'.", len(new_objs), filepath)
     return new_objs
