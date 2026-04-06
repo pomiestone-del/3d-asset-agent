@@ -153,7 +153,7 @@ asset-agent process --model model.fbx --textures ./tex --output ./out --config m
 
 支持的图片格式：`.png` `.jpg` `.jpeg` `.tga` `.tiff` `.tif` `.exr` `.bmp`
 
-**唯一硬性要求：必须有 Albedo 贴图。** 其他通道缺失不会中断处理。
+**建议提供 Albedo 贴图。** 缺少 Albedo 时 Agent 会尝试保留模型自带材质继续处理，但如果模型本身没有材质，最终输出会是空白材质。其他通道缺失不会中断处理。
 
 ## 特殊贴图处理
 
