@@ -227,7 +227,9 @@ def main() -> int:
     # ------------------------------------------------------------------
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    render_path = str(output_dir / f"{args.model_name}_preview.png")
+    render_before = str(output_dir / f"{args.model_name}_before.png")
+    render_after = str(output_dir / f"{args.model_name}_after.png")
+    render_glb = str(output_dir / f"{args.model_name}_glb.png")
     glb_path = str(output_dir / f"{args.model_name}.glb")
 
     try:
@@ -238,30 +240,21 @@ def main() -> int:
 
     try:
         # 1. Clean scene
-        log.info("=== Step 1/6: Clean scene ===")
+        log.info("=== Step 1/8: Clean scene ===")
         clean_scene()
 
         # 2. Import model
-        log.info("=== Step 2/6: Import model '%s' ===", args.model)
+        log.info("=== Step 2/8: Import model '%s' ===", args.model)
         mesh_objects = import_model(args.model)
 
         # 2b. Fix broken image texture links (missing external files)
         _fix_broken_image_links(log)
 
-        # 3. Build material (or keep imported MTL materials if no textures)
+        # 3. Setup scene (lights, camera, render settings)
+        log.info("=== Step 3/8: Setup scene ===")
         has_opacity = any(t.get("channel") == "opacity" for t in textures)
-        if textures:
-            log.info("=== Step 3/6: Build PBR material (%d textures) ===", len(textures))
-            build_material(mesh_objects, textures, material_name=args.model_name)
-        else:
-            log.info("=== Step 3/6: No textures provided; keeping imported materials ===")
-
-        # 4. Setup scene (lights, camera, render settings)
-        log.info("=== Step 4/6: Setup scene ===")
         center, _, _, diagonal = get_scene_bbox(mesh_objects)
 
-        # Disable transparent film when model uses opacity to avoid
-        # invisible renders (transparent model on transparent background).
         film_transparent = args.film_transparent
         if has_opacity and film_transparent:
             film_transparent = False
@@ -278,12 +271,23 @@ def main() -> int:
             gpu_enabled=args.gpu,
         )
 
-        # 5. Render preview
-        log.info("=== Step 5/6: Render preview ===")
-        render_preview(render_path)
+        # 4. Render BEFORE (original materials)
+        log.info("=== Step 4/8: Render before (original materials) ===")
+        render_preview(render_before)
 
-        # 6. Export GLB
-        log.info("=== Step 6/6: Export GLB ===")
+        # 5. Build material (or keep imported MTL materials if no textures)
+        if textures:
+            log.info("=== Step 5/8: Build PBR material (%d textures) ===", len(textures))
+            build_material(mesh_objects, textures, material_name=args.model_name)
+        else:
+            log.info("=== Step 5/8: No textures provided; keeping imported materials ===")
+
+        # 6. Render AFTER (PBR materials applied)
+        log.info("=== Step 6/8: Render after (PBR materials) ===")
+        render_preview(render_after)
+
+        # 7. Export GLB
+        log.info("=== Step 7/8: Export GLB ===")
         export_glb(glb_path)
 
     except Exception as exc:
@@ -291,19 +295,47 @@ def main() -> int:
         return 1
 
     # ------------------------------------------------------------------
-    # Optional validation
+    # 8. Validate GLB + render GLB re-import preview
     # ------------------------------------------------------------------
     if not args.skip_validation:
-        log.info("=== Post-export validation ===")
+        log.info("=== Step 8/8: Validate GLB + render re-import preview ===")
         errors = validate_glb(glb_path)
+
+        # Render from the re-imported GLB (scene is already set up by validate_glb)
+        # Re-setup lighting/camera for the re-imported meshes.
+        import bpy  # type: ignore[import-unresolved]
+        reimported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+        if reimported_meshes:
+            center_g, _, _, diagonal_g = get_scene_bbox(reimported_meshes)
+            setup_scene(
+                center_g,
+                diagonal_g,
+                engine=args.render_engine,
+                resolution=(args.render_width, args.render_height),
+                samples=args.render_samples,
+                denoise=args.denoise,
+                film_transparent=film_transparent,
+                gpu_enabled=args.gpu,
+            )
+            render_preview(render_glb)
+            log.info("  GLB re-import preview -> '%s'", render_glb)
+
         if errors:
-            result = {"status": "fail", "errors": errors, "glb": glb_path, "preview": render_path}
+            result = {
+                "status": "fail", "errors": errors, "glb": glb_path,
+                "preview_before": render_before, "preview_after": render_after,
+                "preview_glb": render_glb,
+            }
             print(json.dumps(result))
             return 2
     else:
         errors = []
 
-    result = {"status": "pass", "errors": [], "glb": glb_path, "preview": render_path}
+    result = {
+        "status": "pass", "errors": [], "glb": glb_path,
+        "preview_before": render_before, "preview_after": render_after,
+        "preview_glb": render_glb,
+    }
     print(json.dumps(result))
     log.info("=== Done ===")
     return 0

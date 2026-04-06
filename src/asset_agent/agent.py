@@ -32,6 +32,9 @@ class ProcessingResult:
     success: bool
     glb_path: Path | None = None
     preview_path: Path | None = None
+    preview_before: Path | None = None
+    preview_after: Path | None = None
+    preview_glb: Path | None = None
     texture_map: TextureMap | None = None
     validation: ValidationResult | None = None
     errors: list[str] = field(default_factory=list)
@@ -193,7 +196,11 @@ class AssetAgent:
         status = blender_result.get("status", "unknown")
         errors = blender_result.get("errors", [])
         glb_path = Path(blender_result["glb"]) if "glb" in blender_result else None
-        preview_path = Path(blender_result["preview"]) if "preview" in blender_result else None
+        preview_before = Path(blender_result["preview_before"]) if "preview_before" in blender_result else None
+        preview_after = Path(blender_result["preview_after"]) if "preview_after" in blender_result else None
+        preview_glb = Path(blender_result["preview_glb"]) if "preview_glb" in blender_result else None
+        # Backward compat: use preview_after as the main preview
+        preview_path = preview_after
 
         # 4. Summarize
         validation_result = ValidationResult(
@@ -211,6 +218,9 @@ class AssetAgent:
             success=success,
             glb_path=glb_path,
             preview_path=preview_path,
+            preview_before=preview_before,
+            preview_after=preview_after,
+            preview_glb=preview_glb,
             texture_map=texture_map,
             validation=validation_result,
             errors=errors,

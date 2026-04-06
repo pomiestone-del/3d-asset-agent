@@ -150,12 +150,24 @@ def _to_model_info(d: dict) -> ModelInfo:
 
 def _display_result_card(m: ModelInfo, result: ProcessingResult, item_elapsed: float, output_folder: Path):
     """Render a single result card with preview, info, and open-folder button."""
+    # A/B/GLB comparison row
+    if result.success:
+        img_cols = st.columns(3)
+        for col, label, path in zip(
+            img_cols,
+            ["Before", "After (PBR)", "GLB Re-import"],
+            [result.preview_before, result.preview_after, result.preview_glb],
+        ):
+            with col:
+                if path and path.exists():
+                    st.image(str(path), caption=label, use_container_width=True)
+                else:
+                    st.caption(f"{label}: N/A")
+
     cols = st.columns([1, 3, 1])
 
     with cols[0]:
-        if result.success and result.preview_path and result.preview_path.exists():
-            st.image(str(result.preview_path), use_container_width=True)
-        elif result.success:
+        if result.success:
             st.markdown(":white_check_mark:")
         else:
             st.markdown(":x:")

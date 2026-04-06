@@ -77,9 +77,13 @@ def process(
     if result.success:
         console.print("\n[bold green]Pipeline completed successfully.[/bold green]")
         if result.glb_path:
-            console.print(f"  GLB:     {result.glb_path}")
-        if result.preview_path:
-            console.print(f"  Preview: {result.preview_path}")
+            console.print(f"  GLB:          {result.glb_path}")
+        if result.preview_before:
+            console.print(f"  Before:       {result.preview_before}")
+        if result.preview_after:
+            console.print(f"  After:        {result.preview_after}")
+        if result.preview_glb:
+            console.print(f"  GLB preview:  {result.preview_glb}")
     else:
         console.print("\n[bold red]Pipeline finished with errors:[/bold red]")
         for err in result.errors:
