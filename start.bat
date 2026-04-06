@@ -15,5 +15,5 @@ if not exist ".setup_done" (
     echo.
 )
 
-start http://localhost:8501
+:: Streamlit opens browser automatically (--server.headless=false is default)
 streamlit run app.py
