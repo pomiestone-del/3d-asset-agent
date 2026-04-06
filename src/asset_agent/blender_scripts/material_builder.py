@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 import bpy  # type: ignore[import-unresolved]
+import numpy as np
 
 log = logging.getLogger("blender_scripts.material_builder")
 
@@ -308,10 +310,109 @@ def _connect_albedo(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     return y_cursor + _Y_STEP
 
 
+# ---------------------------------------------------------------------------
+# Yellow normal map detection & reconstruction
+# ---------------------------------------------------------------------------
+
+_YELLOW_NORMAL_FILENAME_RE = re.compile(
+    r"[_\-\s](BC5n?|Yellow|RG|2ch|DXT5n?m?|ATI2)(?=[_\-.\s]|$)",
+    re.IGNORECASE,
+)
+
+_DETECT_SAMPLE_COUNT = 10000
+
+
+def _is_yellow_normal_by_filename(filepath: str) -> bool:
+    """Check if the filename contains known dual-channel normal keywords."""
+    stem = Path(filepath).stem
+    return _YELLOW_NORMAL_FILENAME_RE.search(stem) is not None
+
+
+def _is_yellow_normal_by_pixels(img: bpy.types.Image) -> bool:
+    """Sample pixels to detect dual-channel normal (B channel near zero)."""
+    total_pixels = img.size[0] * img.size[1]
+    if total_pixels == 0:
+        return False
+
+    pixels = np.array(img.pixels[:], dtype=np.float32)
+    pixels = pixels.reshape(-1, 4)
+
+    # Sample for speed on large images
+    if len(pixels) > _DETECT_SAMPLE_COUNT:
+        indices = np.linspace(0, len(pixels) - 1, _DETECT_SAMPLE_COUNT, dtype=int)
+        sample = pixels[indices]
+    else:
+        sample = pixels
+
+    R, G, B = sample[:, 0], sample[:, 1], sample[:, 2]
+
+    b_mean = float(np.mean(B))
+    r_mean = float(np.mean(R))
+    g_mean = float(np.mean(G))
+    r_std = float(np.std(R))
+
+    is_yellow = (
+        b_mean < 0.05
+        and r_mean > 0.3
+        and g_mean > 0.3
+        and r_std > 0.05
+    )
+
+    if is_yellow:
+        log.info(
+            "  Yellow normal detected (B_mean=%.3f, R_mean=%.3f, G_mean=%.3f)",
+            b_mean, r_mean, g_mean,
+        )
+
+    return is_yellow
+
+
+def _reconstruct_yellow_normal(img: bpy.types.Image) -> bool:
+    """Reconstruct B channel from R/G for a dual-channel normal map.
+
+    Modifies the image pixels in-place and packs the result.
+    Returns True if reconstruction was performed.
+    """
+    filepath = img.filepath or img.name
+
+    # Detect
+    by_name = _is_yellow_normal_by_filename(filepath)
+    if not by_name and not _is_yellow_normal_by_pixels(img):
+        return False
+
+    if by_name:
+        log.info("  Yellow normal (filename match): %s", Path(filepath).name)
+
+    # Reconstruct: Z = sqrt(1 - X² - Y²)
+    w, h = img.size
+    pixels = np.array(img.pixels[:], dtype=np.float32).reshape(-1, 4)
+
+    X = pixels[:, 0] * 2.0 - 1.0  # R -> [-1, 1]
+    Y = pixels[:, 1] * 2.0 - 1.0  # G -> [-1, 1]
+
+    Z_sq = np.clip(1.0 - X * X - Y * Y, 0.0, 1.0)
+    Z = np.sqrt(Z_sq)
+
+    pixels[:, 2] = Z * 0.5 + 0.5  # -> [0, 1]
+
+    img.pixels[:] = pixels.ravel().tolist()
+    img.pack()
+
+    log.info(
+        "  Reconstructed blue channel (%dx%d, %.1f MP)",
+        w, h, w * h / 1e6,
+    )
+    return True
+
+
 def _connect_normal(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
     tex, y_cursor = _add_tex_image(nodes, info, y_cursor)
     if tex is None:
         return y_cursor
+
+    # Auto-detect and fix yellow (dual-channel) normal maps
+    _reconstruct_yellow_normal(tex.image)
+
     normal_map = nodes.new("ShaderNodeNormalMap")
     normal_map.location = (_X_MID, y_cursor)
     links.new(tex.outputs["Color"], normal_map.inputs["Color"])
