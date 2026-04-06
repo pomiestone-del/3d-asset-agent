@@ -60,7 +60,7 @@ def send_slack_notification(
 
     try:
         resp = requests.post(webhook_url, json=payload, timeout=10)
-        if resp.status_code == 200:
+        if resp.ok:
             logger.info("Slack notification sent for '%s'.", model_name)
             return True
         logger.warning("Slack returned %d: %s", resp.status_code, resp.text)

@@ -242,7 +242,7 @@ class AssetAgent:
     # -- Batch processing ---------------------------------------------------
 
     @staticmethod
-    def _discover_texture_dir(model_path: Path) -> Path:
+    def discover_texture_dir(model_path: Path) -> Path:
         """Heuristic to find the texture directory for a model file.
 
         Checks (in order):
@@ -292,7 +292,7 @@ class AssetAgent:
 
         for model_path in model_files:
             name = model_path.stem
-            texture_dir = self._discover_texture_dir(model_path)
+            texture_dir = self.discover_texture_dir(model_path)
             model_output = output_dir / name
             logger.info("--- Batch item: %s ---", name)
 
