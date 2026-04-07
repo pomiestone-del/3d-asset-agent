@@ -121,7 +121,7 @@ def _scan_models(root: str) -> list[dict]:
     for folder, files in sorted(by_folder.items()):
         best = min(files, key=lambda f: _format_rank(f.suffix.lower()))
         texture_dir = AssetAgent.discover_texture_dir(best)
-        tex_count = len(collect_images(texture_dir, recursive=False))
+        tex_count = len(collect_images(texture_dir, recursive=True))
         display_name = folder.name if folder != root_path else best.stem
 
         found.append({
@@ -305,7 +305,7 @@ if is_dir:
 elif is_file:
     if input_path.suffix.lower() in _ALL_SUPPORTED:
         tex_dir = AssetAgent.discover_texture_dir(input_path)
-        tex_count = len(collect_images(tex_dir, recursive=False))
+        tex_count = len(collect_images(tex_dir, recursive=True))
         st.caption(
             f"Model: `{input_path.name}` ({input_path.suffix}) | "
             f"Textures: {tex_count} files in `{tex_dir}`"
@@ -341,7 +341,7 @@ if st.button("Start Processing", type="primary", use_container_width=True):
                 name=input_path.stem,
                 model=input_path,
                 texture_dir=tex_dir,
-                tex_count=len(collect_images(tex_dir, recursive=False)),
+                tex_count=len(collect_images(tex_dir, recursive=True)),
                 format=input_path.suffix.lower(),
                 folder=input_path.parent,
             )
