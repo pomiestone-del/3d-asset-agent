@@ -445,11 +445,21 @@ class TextureMatcher:
         ``texture_pbr_20250901_normal``, ``texture_pbr_20250901_roughness``),
         and there is an unmatched image whose stem *equals* that prefix
         (``texture_pbr_20250901``), treat it as the albedo.
+
+        Special case: if there is exactly one image in the directory and
+        nothing matched any channel, treat that single image as the albedo.
         """
+        unmatched = [img for img in images if img not in matched]
+
+        if not matched and len(unmatched) == 1:
+            logger.info(
+                "  albedo (only image, no channel match) -> %s", unmatched[0].name
+            )
+            return unmatched[0]
+
         if len(matched) < 1:
             return None
 
-        unmatched = [img for img in images if img not in matched]
         if not unmatched:
             return None
 
