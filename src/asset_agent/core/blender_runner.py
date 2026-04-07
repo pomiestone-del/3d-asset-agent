@@ -227,6 +227,67 @@ def run_process_asset(
     return _extract_json_result(stdout)
 
 
+def run_process_group(
+    model_entries: list[dict[str, Any]],
+    output_dir: Path,
+    *,
+    group_name: str = "group",
+    blender_path: str = "blender",
+    render_engine: str = "CYCLES",
+    render_width: int = 1920,
+    render_height: int = 1080,
+    render_samples: int = 128,
+    denoise: bool = True,
+    film_transparent: bool = True,
+    gpu_enabled: bool = True,
+    skip_validation: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Import multiple models into a single Blender scene and export one GLB.
+
+    Args:
+        model_entries: List of ``{"path", "material_name", "textures": [...]}`` dicts.
+        output_dir: Directory for GLB and preview outputs.
+        group_name: Base name for output files.
+
+    Returns:
+        Parsed JSON result dict with keys ``status``, ``errors``, ``glb``,
+        ``preview``, ``glb_preview``.
+    """
+    models_json_str = json.dumps(model_entries, ensure_ascii=False)
+
+    args: list[str] = [
+        "--models-json", models_json_str,
+        "--output-dir", str(output_dir.resolve()),
+        "--model-name", group_name,
+        "--render-engine", render_engine,
+        "--render-width", str(render_width),
+        "--render-height", str(render_height),
+        "--render-samples", str(render_samples),
+        "--textures-json", "[]",   # required by argparse but unused in group mode
+    ]
+    if denoise:
+        args.append("--denoise")
+    else:
+        args.append("--no-denoise")
+    if film_transparent:
+        args.append("--film-transparent")
+    if gpu_enabled:
+        args.append("--gpu")
+    else:
+        args.append("--no-gpu")
+    if skip_validation:
+        args.append("--skip-validation")
+
+    stdout = run_blender_script(
+        _PROCESS_SCRIPT,
+        args,
+        blender_path=blender_path,
+        timeout=timeout,
+    )
+    return _extract_json_result(stdout)
+
+
 def run_validate_glb(
     glb_path: Path,
     *,

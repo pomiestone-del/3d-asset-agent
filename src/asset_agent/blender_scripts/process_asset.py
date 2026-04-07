@@ -38,6 +38,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="Path to the model file (.obj or .fbx).")
     parser.add_argument("--obj", default=None, dest="model", help=argparse.SUPPRESS)
     parser.add_argument(
+        "--models-json",
+        default=None,
+        help=(
+            "JSON array for multi-model group mode. "
+            'Each entry: {"path", "material_name", "textures": [...]}.'
+        ),
+    )
+    parser.add_argument(
         "--textures-json",
         required=True,
         help=(
@@ -71,8 +79,8 @@ def _parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args(custom_args)
-    if not args.validate_only and not args.model:
-        parser.error("--model (or --obj) is required")
+    if not args.validate_only and not args.model and not args.models_json:
+        parser.error("--model (or --models-json) is required")
     return args
 
 
@@ -230,6 +238,24 @@ def main() -> int:
     render_path = str(output_dir / f"{args.model_name}_preview.png")
     glb_path = str(output_dir / f"{args.model_name}.glb")
 
+    # ------------------------------------------------------------------
+    # Multi-model group mode
+    # ------------------------------------------------------------------
+    if args.models_json:
+        try:
+            models_data = json.loads(args.models_json)
+        except Exception as exc:
+            log.error("Failed to parse --models-json: %s", exc)
+            return 1
+        return _run_group_pipeline(args, models_data,
+                                   clean_scene, import_model,
+                                   build_material, get_scene_bbox,
+                                   setup_scene, render_preview,
+                                   export_glb)
+
+    # ------------------------------------------------------------------
+    # Single-model mode
+    # ------------------------------------------------------------------
     try:
         textures = _load_textures_json(args.textures_json)
     except Exception as exc:
@@ -418,6 +444,112 @@ def _render_and_validate_glb(
             log.info("GLB validation passed.")
 
     return rendered, errors
+
+
+def _run_group_pipeline(args, models_data,
+                        clean_scene, import_model,
+                        build_material, get_scene_bbox,
+                        setup_scene, render_preview,
+                        export_glb) -> int:
+    """Import multiple models into one scene and export as a single GLB."""
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    render_path = str(output_dir / f"{args.model_name}_preview.png")
+    glb_path = str(output_dir / f"{args.model_name}.glb")
+
+    log = logging.getLogger("blender_scripts.process_asset")
+
+    try:
+        log.info("=== Group Step 1: Clean scene ===")
+        clean_scene()
+
+        all_mesh_objects = []
+        has_opacity = False
+
+        for i, entry in enumerate(models_data, 1):
+            model_path = entry["path"]
+            material_name = entry.get("material_name", Path(model_path).stem)
+            textures = entry.get("textures", [])
+
+            log.info("=== Group Step 2.%d: Import '%s' ===", i, model_path)
+            mesh_objects = import_model(model_path)
+            _fix_broken_image_links(log)
+
+            if textures:
+                log.info("  Building material '%s' (%d textures).", material_name, len(textures))
+                build_material(mesh_objects, textures, material_name=material_name)
+                if any(t.get("channel") == "opacity" for t in textures):
+                    has_opacity = True
+            else:
+                log.info("  No textures for '%s'; keeping imported materials.", material_name)
+
+            all_mesh_objects.extend(mesh_objects)
+
+        log.info("=== Group Step 3: Setup scene (%d objects) ===", len(all_mesh_objects))
+        center, _, _, diagonal = get_scene_bbox(all_mesh_objects)
+
+        film_transparent = args.film_transparent
+        if has_opacity and film_transparent:
+            film_transparent = False
+            log.info("  Opacity detected; disabling transparent film.")
+
+        setup_scene(
+            center, diagonal,
+            engine=args.render_engine,
+            resolution=(args.render_width, args.render_height),
+            samples=args.render_samples,
+            denoise=args.denoise,
+            film_transparent=film_transparent,
+            gpu_enabled=args.gpu,
+        )
+
+        log.info("=== Group Step 4: Render preview ===")
+        render_preview(render_path)
+
+        log.info("=== Group Step 5: Export GLB ===")
+        export_glb(glb_path)
+
+    except Exception as exc:
+        log.error("Group pipeline failed: %s", exc, exc_info=True)
+        return 1
+
+    # Re-import preview + validation
+    glb_preview_path = str(output_dir / f"{args.model_name}_glb_preview.png")
+    log.info("=== Group Step 6: GLB re-import preview + validation ===")
+
+    from scene_setup import setup_scene as _ss, render_preview as _rp  # type: ignore
+    from utils import get_scene_bbox as _bbox  # type: ignore
+
+    glb_preview_rendered, errors = _render_and_validate_glb(
+        glb_path=glb_path,
+        preview_path=glb_preview_path,
+        engine=args.render_engine,
+        resolution=(args.render_width, args.render_height),
+        samples=args.render_samples,
+        denoise=args.denoise,
+        film_transparent=args.film_transparent,
+        gpu_enabled=args.gpu,
+        skip_validation=args.skip_validation,
+        render_preview_fn=_rp,
+        setup_scene_fn=_ss,
+        get_scene_bbox_fn=_bbox,
+    )
+
+    result_base = {
+        "glb": glb_path,
+        "preview": render_path,
+        "glb_preview": glb_preview_path if glb_preview_rendered else None,
+    }
+
+    if errors:
+        result = {**result_base, "status": "fail", "errors": errors}
+        print(json.dumps(result))
+        return 2
+
+    result = {**result_base, "status": "pass", "errors": []}
+    print(json.dumps(result))
+    log.info("=== Group Done ===")
+    return 0
 
 
 if __name__ == "__main__":

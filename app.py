@@ -63,6 +63,11 @@ class ModelInfo:
     format: str
     all_formats: list[str] = field(default_factory=list)
     folder: Path = field(default_factory=Path)
+    group_models: list[Path] = field(default_factory=list)  # populated for multi-model folders
+
+    @property
+    def is_group(self) -> bool:
+        return len(self.group_models) > 1
 
 
 # Prefer formats in this order when a folder has multiple model files
@@ -107,9 +112,12 @@ def _open_folder(folder: Path):
 
 @st.cache_data(show_spinner="Scanning for models...")
 def _scan_models(root: str) -> list[dict]:
-    """Scan root directory for model files — all files per folder included.
+    """Scan root directory for model files.
 
-    Returns dicts (not dataclass) because st.cache_data requires serializable return types.
+    * Single model in folder  → one entry processed independently.
+    * Multiple models in folder → one group entry processed together into one GLB.
+
+    Returns dicts (not dataclass) because st.cache_data requires serializable types.
     """
     root_path = Path(root)
     by_folder: dict[Path, list[Path]] = {}
@@ -120,12 +128,29 @@ def _scan_models(root: str) -> list[dict]:
     found = []
     for folder, files in sorted(by_folder.items()):
         all_formats = sorted({f.suffix.lower() for f in files})
-        for model_file in sorted(files, key=lambda f: f.name):
+        sorted_files = sorted(files, key=lambda f: f.name)
+
+        if len(sorted_files) > 1:
+            # Group: combine all models in this folder into one GLB
+            tex_count = len(collect_images(folder, recursive=True))
+            found.append({
+                "name": folder.name,
+                "model": str(sorted_files[0]),
+                "group_models": [str(f) for f in sorted_files],
+                "texture_dir": str(folder),
+                "tex_count": tex_count,
+                "format": " + ".join(all_formats),
+                "all_formats": all_formats,
+                "folder": str(folder),
+            })
+        else:
+            model_file = sorted_files[0]
             texture_dir = AssetAgent.discover_texture_dir(model_file)
             tex_count = len(collect_images(texture_dir, recursive=True))
             found.append({
                 "name": model_file.stem,
                 "model": str(model_file),
+                "group_models": [],
                 "texture_dir": str(texture_dir),
                 "tex_count": tex_count,
                 "format": model_file.suffix.lower(),
@@ -144,6 +169,7 @@ def _to_model_info(d: dict) -> ModelInfo:
         format=d["format"],
         all_formats=d["all_formats"],
         folder=Path(d["folder"]),
+        group_models=[Path(p) for p in d.get("group_models", [])],
     )
 
 
@@ -189,19 +215,26 @@ def _display_result_card(m: ModelInfo, result: ProcessingResult, item_elapsed: f
 
 
 def _process_single(m: ModelInfo, output_dir: Path):
-    """Process one model and display results."""
+    """Process one model (or group) and display results."""
     agent = _make_agent()
     progress = st.progress(0, text="Initializing...")
     t0 = time.time()
 
     try:
         progress.progress(20, text=f"Processing {m.name}...")
-        result = agent.process(
-            model_path=m.model,
-            texture_dir=m.texture_dir,
-            output_dir=output_dir,
-            model_name=m.name,
-        )
+        if m.is_group:
+            result = agent.process_group(
+                model_paths=m.group_models,
+                output_dir=output_dir,
+                group_name=m.name,
+            )
+        else:
+            result = agent.process(
+                model_path=m.model,
+                texture_dir=m.texture_dir,
+                output_dir=output_dir,
+                model_name=m.name,
+            )
     except Exception as exc:
         result = ProcessingResult(success=False, errors=[str(exc)])
 
@@ -230,12 +263,19 @@ def _run_batch(models: list[ModelInfo], output_base: Path):
         model_out = output_base / m.name
         item_t0 = time.time()
         try:
-            result = agent.process(
-                model_path=m.model,
-                texture_dir=m.texture_dir,
-                output_dir=model_out,
-                model_name=m.name,
-            )
+            if m.is_group:
+                result = agent.process_group(
+                    model_paths=m.group_models,
+                    output_dir=model_out,
+                    group_name=m.name,
+                )
+            else:
+                result = agent.process(
+                    model_path=m.model,
+                    texture_dir=m.texture_dir,
+                    output_dir=model_out,
+                    model_name=m.name,
+                )
         except Exception as exc:
             result = ProcessingResult(success=False, errors=[str(exc)])
 
@@ -349,6 +389,7 @@ if st.button("Start Processing", type="primary", use_container_width=True):
                 tex_count=len(collect_images(tex_dir, recursive=True)),
                 format=input_path.suffix.lower(),
                 folder=input_path.parent,
+                group_models=[],
             )
             _process_single(m, Path(output_dir_str))
     else:

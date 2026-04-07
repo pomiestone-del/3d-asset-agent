@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from asset_agent.core.blender_runner import run_process_asset
+from asset_agent.core.blender_runner import run_process_asset, run_process_group
 from asset_agent.core.normal_map_converter import NormalConvertMode, NormalFormat, NormalMapConverter
 from asset_agent.core.texture_matcher import TextureMap, create_matcher
 from asset_agent.core.validator import ValidationResult
@@ -426,6 +426,102 @@ class AssetAgent:
         passed = sum(1 for r in results if r.success)
         logger.info("Batch complete: %d/%d succeeded", passed, len(results))
         return results
+
+    # -- Group processing (multiple models → one GLB) -----------------------
+
+    def process_group(
+        self,
+        model_paths: list[Path],
+        output_dir: Path,
+        group_name: str,
+        *,
+        normal_format: NormalConvertMode | None = None,
+    ) -> ProcessingResult:
+        """Import all *model_paths* into one Blender scene and export a single GLB.
+
+        Each model gets its own texture matching pass and PBR material.
+        Outputs go directly into *output_dir* (no per-model subfolders).
+
+        Args:
+            model_paths: Ordered list of model files to combine.
+            output_dir: Destination for ``{group_name}.glb`` and previews.
+            group_name: Base name for all output files.
+            normal_format: Optional normal map conversion (applied per model).
+
+        Returns:
+            ``ProcessingResult`` summarizing success, output paths, and errors.
+        """
+        logger.info("=== Asset Agent: processing group '%s' (%d models) ===",
+                    group_name, len(model_paths))
+
+        ensure_directory(output_dir)
+
+        # Texture matching per model
+        model_entries: list[dict] = []
+        for model_path in model_paths:
+            texture_dir = self.discover_texture_dir(model_path)
+            try:
+                matcher = create_matcher(model_name=model_path.stem)
+                texture_map = matcher.match(texture_dir, model_path=model_path)
+                textures_payload = build_textures_payload(texture_map.as_dict())
+                logger.info("  %s: matched channels %s",
+                            model_path.name, texture_map.channel_names)
+            except MissingAlbedoError:
+                logger.warning("  %s: no albedo found; keeping imported materials.",
+                               model_path.name)
+                textures_payload = []
+
+            if normal_format is not None and textures_payload:
+                textures_payload = self._convert_normal_maps(
+                    textures_payload, output_dir, normal_format
+                )
+
+            model_entries.append({
+                "path": str(model_path.resolve()),
+                "material_name": model_path.stem,
+                "textures": textures_payload,
+            })
+
+        cfg = self.config
+        blender_result = run_process_group(
+            model_entries=model_entries,
+            output_dir=output_dir,
+            group_name=group_name,
+            blender_path=cfg.blender.executable,
+            render_engine=cfg.render.engine,
+            render_width=cfg.render.resolution[0],
+            render_height=cfg.render.resolution[1],
+            render_samples=cfg.render.samples,
+            denoise=cfg.render.denoise,
+            film_transparent=cfg.render.film_transparent,
+            gpu_enabled=cfg.render.gpu_enabled,
+            skip_validation=not cfg.validation.enabled,
+        )
+
+        status = blender_result.get("status", "unknown")
+        errors = blender_result.get("errors", [])
+        glb_path = Path(blender_result["glb"]) if "glb" in blender_result else None
+        preview_path = Path(blender_result["preview"]) if "preview" in blender_result else None
+        glb_preview_path = (
+            Path(blender_result["glb_preview"])
+            if blender_result.get("glb_preview")
+            else None
+        )
+
+        success = status == "pass"
+        if success:
+            logger.info("Group pipeline completed successfully.")
+        else:
+            logger.warning("Group pipeline finished with issues: %s", errors)
+
+        return ProcessingResult(
+            success=success,
+            glb_path=glb_path,
+            preview_path=preview_path,
+            glb_preview_path=glb_preview_path,
+            validation=ValidationResult(passed=success, errors=errors),
+            errors=errors,
+        )
 
     # -- GLB validation (standalone) ----------------------------------------
 
