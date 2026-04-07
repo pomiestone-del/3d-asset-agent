@@ -251,24 +251,17 @@ def get_scene_bbox(objects: list[bpy.types.Object]) -> tuple[Vector, Vector, Vec
 # GLB validation (runs in a separate clean scene)
 # ---------------------------------------------------------------------------
 
-def validate_glb(glb_path: str) -> list[str]:
-    """Re-import a GLB in a fresh scene and verify material integrity.
+def check_loaded_materials() -> list[str]:
+    """Inspect all materials in the current scene and return error strings.
 
-    Args:
-        glb_path: Path to the ``.glb`` file.
+    Checks that each material uses nodes, has a Principled BSDF, and that any
+    image texture nodes are connected and packed.  Call this after importing a
+    GLB into a fresh scene.
 
     Returns:
         List of error strings (empty = pass).
     """
     errors: list[str] = []
-
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=glb_path)
-
-    imported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
-    if not imported_meshes:
-        errors.append("No mesh objects found after re-importing GLB.")
-        return errors
 
     for mat in bpy.data.materials:
         if not mat.use_nodes:
@@ -305,3 +298,22 @@ def validate_glb(glb_path: str) -> list[str]:
         log.info("GLB validation passed.")
 
     return errors
+
+
+def validate_glb(glb_path: str) -> list[str]:
+    """Re-import a GLB in a fresh scene and verify material integrity.
+
+    Args:
+        glb_path: Path to the ``.glb`` file.
+
+    Returns:
+        List of error strings (empty = pass).
+    """
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=glb_path)
+
+    imported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    if not imported_meshes:
+        return ["No mesh objects found after re-importing GLB."]
+
+    return check_loaded_materials()

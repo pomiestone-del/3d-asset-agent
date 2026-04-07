@@ -80,8 +80,8 @@ class TestConfigLoading:
     def test_load_rules_returns_all_channels(self, rules: list) -> None:
         names = [r.name for r in rules]
         expected = [
-            "albedo", "normal", "roughness", "metallic",
-            "ao", "emissive", "opacity", "displacement", "orm",
+            "albedo", "nnn_normal", "normal", "mro", "roughness", "metallic",
+            "ao", "emissive", "opacity", "displacement", "orm", "ramp",
         ]
         assert names == expected
 

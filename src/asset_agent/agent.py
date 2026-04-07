@@ -10,7 +10,13 @@ from typing import Any
 
 from asset_agent.core.blender_runner import run_process_asset, run_process_group
 from asset_agent.core.normal_map_converter import NormalConvertMode, NormalFormat, NormalMapConverter
-from asset_agent.core.texture_matcher import TextureMap, create_matcher
+from asset_agent.core.texture_matcher import (
+    TextureMap,
+    TextureMatcher,
+    create_matcher,
+    load_channel_rules,
+    load_format_priority,
+)
 from asset_agent.core.validator import ValidationResult
 from asset_agent.core.validator import validate_glb as _validate_glb
 from asset_agent.exceptions import MissingAlbedoError, NormalMapConversionError
@@ -178,15 +184,14 @@ class AssetAgent:
                 textures_payload = build_textures_payload(texture_map.as_dict())
 
         # 3. Convert normal maps (optional)
+        ensure_directory(output_dir)
         if normal_format is not None:
-            ensure_directory(output_dir)
             textures_payload = self._convert_normal_maps(
                 textures_payload, output_dir, normal_format
             )
 
         # 4. Run Blender pipeline
         logger.info("[3/4] Running Blender pipeline...")
-        ensure_directory(output_dir)
 
         cfg = self.config
         blender_result = run_process_asset(
@@ -205,23 +210,10 @@ class AssetAgent:
             skip_validation=(not cfg.validation.enabled) or (not textures_payload),
         )
 
-        status = blender_result.get("status", "unknown")
-        errors = blender_result.get("errors", [])
-        glb_path = Path(blender_result["glb"]) if "glb" in blender_result else None
-        preview_path = Path(blender_result["preview"]) if "preview" in blender_result else None
-        glb_preview_path = (
-            Path(blender_result["glb_preview"])
-            if blender_result.get("glb_preview")
-            else None
+        success, errors, glb_path, preview_path, glb_preview_path = (
+            self._parse_blender_result(blender_result)
         )
 
-        # 4. Summarize
-        validation_result = ValidationResult(
-            passed=(status == "pass"),
-            errors=errors,
-        )
-
-        success = status == "pass"
         if success:
             logger.info("[4/4] Pipeline completed successfully.")
         else:
@@ -233,9 +225,19 @@ class AssetAgent:
             preview_path=preview_path,
             glb_preview_path=glb_preview_path,
             texture_map=texture_map,
-            validation=validation_result,
+            validation=ValidationResult(passed=success, errors=errors),
             errors=errors,
         )
+
+    @staticmethod
+    def _parse_blender_result(r: dict) -> tuple:
+        """Extract (success, errors, glb_path, preview_path, glb_preview_path) from a Blender result dict."""
+        success = r.get("status", "unknown") == "pass"
+        errors = r.get("errors", [])
+        glb_path = Path(r["glb"]) if "glb" in r else None
+        preview_path = Path(r["preview"]) if "preview" in r else None
+        glb_preview_path = Path(r["glb_preview"]) if r.get("glb_preview") else None
+        return success, errors, glb_path, preview_path, glb_preview_path
 
     # -- Normal map conversion -----------------------------------------------
 
@@ -374,6 +376,7 @@ class AssetAgent:
             ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
         ),
         normal_format: NormalConvertMode | None = None,
+        skip_existing: bool = False,
     ) -> list[ProcessingResult]:
         """Discover and process all model files under *input_dir*.
 
@@ -387,14 +390,13 @@ class AssetAgent:
             extensions: File extensions to consider as models.
             normal_format: Optional normal map conversion mode applied to
                 every model in the batch (see ``process()`` for details).
+            skip_existing: If ``True``, skip any model whose output GLB
+                already exists (resume interrupted batch runs).
 
         Returns:
             List of ``ProcessingResult`` — one per model file found.
         """
-        model_files = sorted(
-            p for p in input_dir.rglob("*")
-            if p.suffix.lower() in extensions and p.is_file()
-        )
+        model_files = self._collect_model_files(input_dir, output_dir, extensions)
 
         if not model_files:
             logger.warning("No model files found in '%s'", input_dir)
@@ -402,11 +404,19 @@ class AssetAgent:
 
         logger.info("Batch: found %d model(s) in '%s'", len(model_files), input_dir)
         results: list[ProcessingResult] = []
+        skipped = 0
 
         for model_path in model_files:
             name = model_path.stem
-            texture_dir = self.discover_texture_dir(model_path)
             model_output = output_dir / name
+            glb_path = model_output / f"{name}.glb"
+
+            if skip_existing and glb_path.exists():
+                logger.info("--- Batch item: %s [SKIP — already done] ---", name)
+                skipped += 1
+                continue
+
+            texture_dir = self.discover_texture_dir(model_path)
             logger.info("--- Batch item: %s ---", name)
 
             try:
@@ -424,8 +434,84 @@ class AssetAgent:
             results.append(result)
 
         passed = sum(1 for r in results if r.success)
-        logger.info("Batch complete: %d/%d succeeded", passed, len(results))
+        logger.info(
+            "Batch complete: %d/%d succeeded%s",
+            passed, len(results),
+            f", {skipped} skipped (already done)" if skipped else "",
+        )
         return results
+
+    @staticmethod
+    def _collect_model_files(
+        input_dir: Path,
+        output_dir: Path,
+        extensions: tuple[str, ...],
+    ) -> list[Path]:
+        """Discover unique source model files under *input_dir*.
+
+        Excludes files that live under *output_dir* (written by previous runs)
+        and keeps only the first file per stem when duplicates exist across
+        extensions (sorted order, so .blend wins over .glb alphabetically).
+        """
+        output_dir_resolved = output_dir.resolve()
+        seen_stems: set[str] = set()
+        model_files: list[Path] = []
+        for p in sorted(input_dir.rglob("*")):
+            if not (p.is_file() and p.suffix.lower() in extensions):
+                continue
+            try:
+                p.resolve().relative_to(output_dir_resolved)
+                continue  # inside output_dir — skip
+            except ValueError:
+                pass
+            if p.stem not in seen_stems:
+                seen_stems.add(p.stem)
+                model_files.append(p)
+        return model_files
+
+    @staticmethod
+    def scan_status(
+        input_dir: Path,
+        output_dir: Path,
+        extensions: tuple[str, ...] = (
+            ".obj", ".fbx", ".blend", ".gltf", ".glb",
+            ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
+        ),
+    ) -> dict[str, list[str]]:
+        """Report processing status for all model files under *input_dir*.
+
+        Checks whether the expected output GLB exists for each model.
+
+        Args:
+            input_dir: Directory containing source model files.
+            output_dir: Base output directory (same layout as ``batch_process``).
+            extensions: File extensions to consider as models.
+
+        Returns:
+            Dict with keys ``"done"``, ``"pending"``, ``"failed"`` — each
+            containing a list of model names.  ``"failed"`` means the output
+            directory exists but the GLB is absent (crashed mid-run).
+        """
+        model_files = AssetAgent._collect_model_files(input_dir, output_dir, extensions)
+
+        done: list[str] = []
+        pending: list[str] = []
+        failed: list[str] = []
+
+        for model_path in model_files:
+            name = model_path.stem
+            model_output = output_dir / name
+            glb_path = model_output / f"{name}.glb"
+
+            if glb_path.exists():
+                done.append(name)
+            elif model_output.exists():
+                # Output folder created but no GLB → previous run crashed
+                failed.append(name)
+            else:
+                pending.append(name)
+
+        return {"done": done, "pending": pending, "failed": failed}
 
     # -- Group processing (multiple models → one GLB) -----------------------
 
@@ -456,12 +542,17 @@ class AssetAgent:
 
         ensure_directory(output_dir)
 
+        # Load YAML config once — reused for every model in the group
+        _rules = load_channel_rules()
+        _priority = load_format_priority()
+
         # Texture matching per model
         model_entries: list[dict] = []
         for model_path in model_paths:
             texture_dir = self.discover_texture_dir(model_path)
             try:
-                matcher = create_matcher(model_name=model_path.stem)
+                matcher = TextureMatcher(rules=_rules, format_priority=_priority,
+                                         model_name=model_path.stem)
                 texture_map = matcher.match(texture_dir, model_path=model_path)
                 textures_payload = build_textures_payload(texture_map.as_dict())
                 logger.info("  %s: matched channels %s",
@@ -498,17 +589,10 @@ class AssetAgent:
             skip_validation=not cfg.validation.enabled,
         )
 
-        status = blender_result.get("status", "unknown")
-        errors = blender_result.get("errors", [])
-        glb_path = Path(blender_result["glb"]) if "glb" in blender_result else None
-        preview_path = Path(blender_result["preview"]) if "preview" in blender_result else None
-        glb_preview_path = (
-            Path(blender_result["glb_preview"])
-            if blender_result.get("glb_preview")
-            else None
+        success, errors, glb_path, preview_path, glb_preview_path = (
+            self._parse_blender_result(blender_result)
         )
 
-        success = status == "pass"
         if success:
             logger.info("Group pipeline completed successfully.")
         else:

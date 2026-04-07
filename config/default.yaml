@@ -1,22 +1,20 @@
 blender:
-  executable: "C:\\Program Files\\Blender Foundation\\Blender 4.0\\blender.exe"
-
-render:
-  engine: "CYCLES"
-  resolution: [1920, 1080]
-  samples: 128
-  denoise: true
-  film_transparent: true
-  gpu_enabled: true
-
+  executable: C:\Program Files\Blender Foundation\Blender 4.2\blender.exe
 export:
-  format: "GLB"
   apply_modifiers: true
   export_tangents: true
-  image_format: "AUTO"
-
+  format: GLB
+  image_format: AUTO
+logging:
+  level: INFO
+render:
+  denoise: true
+  engine: CYCLES
+  film_transparent: true
+  gpu_enabled: true
+  resolution:
+  - 1920
+  - 1080
+  samples: 128
 validation:
   enabled: true
-
-logging:
-  level: "INFO"

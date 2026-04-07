@@ -1,8 +1,10 @@
 """CLI entry-point for the 3D asset processing agent.
 
-Provides three sub-commands::
+Provides sub-commands::
 
     asset-agent process  --model <path> --textures <dir> --output <dir>
+    asset-agent batch    --input-dir <dir> --output-dir <dir> [--skip-existing]
+    asset-agent status   --input-dir <dir> --output-dir <dir>
     asset-agent match    --textures <dir> [--model-name <name>]
     asset-agent validate --glb <path>
 """
@@ -121,6 +123,7 @@ def batch(
         None, "--normal-format",
         help="Normal map format conversion: 'auto', 'directx-to-opengl', or 'opengl-to-directx'.",
     ),
+    skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip models whose output GLB already exists (resume interrupted runs)."),
 ) -> None:
     """Batch-process all supported 3D model files found under input-dir."""
     setup_logging()
@@ -146,10 +149,10 @@ def batch(
             console.print(f"[red]Invalid --normal-format '{normal_format}'. Valid: {valid}[/red]")
             raise typer.Exit(code=1)
 
-    results = agent.batch_process(input_dir, output_dir, normal_format=nf_mode)
+    results = agent.batch_process(input_dir, output_dir, normal_format=nf_mode, skip_existing=skip_existing)
 
     if not results:
-        console.print("[yellow]No model files found.[/yellow]")
+        console.print("[yellow]No model files found (or all skipped).[/yellow]")
         raise typer.Exit(code=0)
 
     # Summary table
@@ -175,6 +178,44 @@ def batch(
 
     if failures:
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+@app.command()
+def status(
+    input_dir: Path = typer.Option(..., "--input-dir", exists=True, file_okay=False, help="Root directory containing source model files."),
+    output_dir: Path = typer.Option(..., "--output-dir", help="Base output directory used during batch processing."),
+) -> None:
+    """Show which models have been processed, are pending, or have failed."""
+    result = AssetAgent.scan_status(input_dir, output_dir)
+
+    done = result["done"]
+    pending = result["pending"]
+    failed = result["failed"]
+    total = len(done) + len(pending) + len(failed)
+
+    table = Table(title=f"Processing Status  ({input_dir.name})", show_lines=False)
+    table.add_column("Model", style="cyan", no_wrap=True)
+    table.add_column("Status", style="white")
+
+    for name in done:
+        table.add_row(name, "[green]done[/green]")
+    for name in failed:
+        table.add_row(name, "[red]failed (output dir exists, no GLB)[/red]")
+    for name in pending:
+        table.add_row(name, "[yellow]pending[/yellow]")
+
+    console.print()
+    console.print(table)
+    console.print(
+        f"\n[bold]{total} total — "
+        f"[green]{len(done)} done[/green], "
+        f"[yellow]{len(pending)} pending[/yellow], "
+        f"[red]{len(failed)} failed[/red][/bold]"
+    )
 
 
 # ---------------------------------------------------------------------------

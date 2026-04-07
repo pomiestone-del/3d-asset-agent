@@ -177,18 +177,29 @@ def _setup_render(
     render.image_settings.color_mode = "RGBA"
     render.film_transparent = film_transparent
 
-    # When film is NOT transparent (e.g. opacity models), use a neutral
-    # light-grey world background so the model is visible.
-    if not film_transparent:
-        world = bpy.data.worlds.get("World")
-        if world is None:
-            world = bpy.data.worlds.new("World")
-        scene.world = world
-        world.use_nodes = True
-        bg_node = world.node_tree.nodes.get("Background")
-        if bg_node:
-            bg_node.inputs["Color"].default_value = (0.85, 0.85, 0.85, 1.0)
-            bg_node.inputs["Strength"].default_value = 1.0
+    # Always set a neutral grey world so Cycles has ambient light for GI.
+    # With film_transparent=True the world colour is invisible in the output
+    # (background pixels are alpha=0), but it still participates in global
+    # illumination — without it, shadowed faces receive zero fill light and
+    # render black, especially on GLB re-import scenes that start world-less.
+    world = bpy.data.worlds.get("World") or bpy.data.worlds.new("World")
+    scene.world = world
+    world.use_nodes = True
+    nt = world.node_tree
+
+    bg_node = nt.nodes.get("Background")
+    if bg_node is None:
+        bg_node = nt.nodes.new("ShaderNodeBackground")
+    # Visible grey background when opaque; neutral ambient fill when transparent.
+    bg_color = (0.85, 0.85, 0.85, 1.0) if not film_transparent else (0.5, 0.5, 0.5, 1.0)
+    bg_node.inputs["Color"].default_value = bg_color
+    bg_node.inputs["Strength"].default_value = 1.0
+
+    out_node = nt.nodes.get("World Output")
+    if out_node is None:
+        out_node = nt.nodes.new("ShaderNodeOutputWorld")
+    if not out_node.inputs["Surface"].links:
+        nt.links.new(bg_node.outputs["Background"], out_node.inputs["Surface"])
 
     if render.engine == "CYCLES":
         cycles = scene.cycles

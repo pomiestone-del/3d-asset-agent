@@ -5,12 +5,25 @@
 
 channels:
   albedo:
-    pattern: "(basecolor|base_color|base-color|albedo|diffuse|diff|col(?:or)?|(?<![a-z])bc(?![a-z]))(?!.*(?:ao|occl))"
+    pattern: "(basecolor|base_color|base-color|albedo|diffuse|diff|col(?:or)?|(?<![a-z])bc(?![a-z])|(?<![a-z])aaa[xt]?(?![a-z]))(?!.*(?:ao|occl))"
     color_space: "sRGB"
     required: true
 
+  # NNN-packed normal map: stores R=normalZ, G=normalX, B=normalY.
+  # Requires a Separate Color + Combine XYZ swizzle before the Normal Map node.
+  # Must be listed before the generic "normal" channel so it takes priority.
+  nnn_normal:
+    pattern: "(?<![a-z])nnn[xt]?(?![a-z])"
+    color_space: "Non-Color"
+
   normal:
     pattern: "(normal|nrm|norm|nor|nml|(?<![a-z])n(?![a-z]))(?!.*(?:ao|occl))"
+    color_space: "Non-Color"
+
+  # MRO packed texture: R=Metallic, G=Roughness, B=Occlusion/AO.
+  # Must be listed before generic "orm" so it takes priority.
+  mro:
+    pattern: "(?<![a-z])mro[xt]?(?![a-z])"
     color_space: "Non-Color"
 
   roughness:
@@ -41,6 +54,14 @@ channels:
   orm:
     pattern: "((?<![a-z])orm(?![a-z])|packed|(?<![a-z])arm(?![a-z])|(?<![a-z])rma(?![a-z]))"
     color_space: "Non-Color"
+
+  # Gradient / ramp textures — recognized so they are never accidentally matched
+  # as albedo.  They are NOT connected during material build because their
+  # access method (geometry-normal-based UV) is incompatible with glTF.
+  # prepare_for_glb_export() removes any ramp Mix nodes from the Base Color path.
+  ramp:
+    pattern: "(?<![a-z])ramp(?![a-z])"
+    color_space: "sRGB"
 
 # Supported image file extensions (lowercase, with leading dot).
 image_extensions:

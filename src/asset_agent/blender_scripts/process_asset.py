@@ -22,6 +22,11 @@ import logging
 import sys
 from pathlib import Path
 
+# Blender's glTF importer places helper/proxy objects (e.g. bone-shape
+# icospheres) into this collection so they are excluded from re-export.
+# We must also exclude them from bounding-box calculations.
+_GLTF_NOT_EXPORTED = "glTF_not_exported"
+
 
 def _parse_args() -> argparse.Namespace:
     """Parse arguments that appear **after** the ``--`` separator."""
@@ -47,7 +52,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--textures-json",
-        required=True,
+        default="[]",
         help=(
             "JSON string or @filepath describing matched textures. "
             'Each entry: {"channel", "path", "color_space", "is_glossiness"}.'
@@ -210,7 +215,7 @@ def main() -> int:
         setup_blender_logging,
         validate_glb,
     )
-    from material_builder import build_material  # type: ignore[import-not-found]
+    from material_builder import build_material, prepare_for_glb_export  # type: ignore[import-not-found]
     from scene_setup import render_preview, setup_scene  # type: ignore[import-not-found]
 
     setup_blender_logging()
@@ -247,11 +252,7 @@ def main() -> int:
         except Exception as exc:
             log.error("Failed to parse --models-json: %s", exc)
             return 1
-        return _run_group_pipeline(args, models_data,
-                                   clean_scene, import_model,
-                                   build_material, get_scene_bbox,
-                                   setup_scene, render_preview,
-                                   export_glb)
+        return _run_group_pipeline(args, models_data)
 
     # ------------------------------------------------------------------
     # Single-model mode
@@ -308,8 +309,9 @@ def main() -> int:
         log.info("=== Step 5/6: Render preview ===")
         render_preview(render_path)
 
-        # 6. Export GLB
-        log.info("=== Step 6/6: Export GLB ===")
+        # 6. Export GLB — patch node trees for glTF compatibility first
+        log.info("=== Step 6/6: Prepare for GLB + Export ===")
+        prepare_for_glb_export()
         export_glb(glb_path)
 
     except Exception as exc:
@@ -378,6 +380,7 @@ def _render_and_validate_glb(
         (rendered, errors) — rendered is True if the preview was written.
     """
     import bpy  # type: ignore[import-unresolved]
+    from utils import check_loaded_materials  # type: ignore[import-not-found]
 
     log = logging.getLogger("blender_scripts.process_asset")
     errors: list[str] = []
@@ -390,7 +393,16 @@ def _render_and_validate_glb(
         errors.append(f"Failed to re-import GLB: {exc}")
         return rendered, errors
 
-    imported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    _gltf_excluded = {
+        obj.name
+        for coll in bpy.data.collections
+        if coll.name == _GLTF_NOT_EXPORTED
+        for obj in coll.objects
+    }
+    imported_meshes = [
+        o for o in bpy.data.objects
+        if o.type == "MESH" and o.name not in _gltf_excluded
+    ]
     if not imported_meshes:
         errors.append("No mesh objects found after re-importing GLB.")
         return rendered, errors
@@ -398,6 +410,22 @@ def _render_and_validate_glb(
     # Render re-import preview
     try:
         center, _, _, diagonal = get_scene_bbox_fn(imported_meshes)
+
+        # The glTF importer sets blend_method="CLIP" for alphaMode:MASK and
+        # "BLEND" for alphaMode:BLEND.  film_transparent + either mode causes
+        # transparent regions to render black; disable it when detected.
+        render_film_transparent = film_transparent
+        if film_transparent:
+            for mat in bpy.data.materials:
+                if getattr(mat, "blend_method", "OPAQUE") in ("CLIP", "BLEND"):
+                    render_film_transparent = False
+                    log.info(
+                        "  Alpha material '%s' (blend_method=%s) detected; "
+                        "disabling transparent film for GLB preview.",
+                        mat.name, mat.blend_method,
+                    )
+                    break
+
         setup_scene_fn(
             center,
             diagonal,
@@ -405,7 +433,7 @@ def _render_and_validate_glb(
             resolution=resolution,
             samples=samples,
             denoise=denoise,
-            film_transparent=film_transparent,
+            film_transparent=render_film_transparent,
             gpu_enabled=gpu_enabled,
         )
         render_preview_fn(preview_path)
@@ -416,44 +444,18 @@ def _render_and_validate_glb(
 
     # Material validation
     if not skip_validation:
-        for mat in bpy.data.materials:
-            if not mat.use_nodes:
-                errors.append(f"Material '{mat.name}': use_nodes is False.")
-                continue
-            nodes = mat.node_tree.nodes
-            bsdf_nodes = [n for n in nodes if n.type == "BSDF_PRINCIPLED"]
-            if not bsdf_nodes:
-                errors.append(f"Material '{mat.name}': no Principled BSDF node found.")
-                continue
-            bsdf = bsdf_nodes[0]
-            tex_nodes = [n for n in nodes if n.type == "TEX_IMAGE"]
-            if tex_nodes:
-                base_color_input = bsdf.inputs.get("Base Color")
-                if base_color_input is None or not base_color_input.links:
-                    errors.append(f"Material '{mat.name}': Base Color input is not connected.")
-            for tex in tex_nodes:
-                if tex.image is None:
-                    errors.append(f"Material '{mat.name}': image node '{tex.name}' has no image.")
-                elif tex.image.packed_file is None:
-                    errors.append(
-                        f"Material '{mat.name}': image '{tex.image.name}' is not packed into the GLB."
-                    )
-        if errors:
-            log.warning("GLB validation found %d issue(s).", len(errors))
-        else:
-            log.info("GLB validation passed.")
+        errors.extend(check_loaded_materials())
 
     return rendered, errors
 
 
-def _run_group_pipeline(args, models_data,
-                        clean_scene, import_model,
-                        build_material, get_scene_bbox,
-                        setup_scene, render_preview,
-                        export_glb) -> int:
+def _run_group_pipeline(args, models_data) -> int:
     """Import multiple models into one scene and export as a single GLB."""
+    from utils import clean_scene, export_glb, get_scene_bbox, import_model  # type: ignore[import-not-found]
+    from material_builder import build_material, prepare_for_glb_export  # type: ignore[import-not-found]
+    from scene_setup import render_preview, setup_scene  # type: ignore[import-not-found]
+
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     render_path = str(output_dir / f"{args.model_name}_preview.png")
     glb_path = str(output_dir / f"{args.model_name}.glb")
 
@@ -506,7 +508,8 @@ def _run_group_pipeline(args, models_data,
         log.info("=== Group Step 4: Render preview ===")
         render_preview(render_path)
 
-        log.info("=== Group Step 5: Export GLB ===")
+        log.info("=== Group Step 5: Prepare for GLB + Export ===")
+        prepare_for_glb_export()
         export_glb(glb_path)
 
     except Exception as exc:
@@ -516,9 +519,6 @@ def _run_group_pipeline(args, models_data,
     # Re-import preview + validation
     glb_preview_path = str(output_dir / f"{args.model_name}_glb_preview.png")
     log.info("=== Group Step 6: GLB re-import preview + validation ===")
-
-    from scene_setup import setup_scene as _ss, render_preview as _rp  # type: ignore
-    from utils import get_scene_bbox as _bbox  # type: ignore
 
     glb_preview_rendered, errors = _render_and_validate_glb(
         glb_path=glb_path,
@@ -530,9 +530,9 @@ def _run_group_pipeline(args, models_data,
         film_transparent=args.film_transparent,
         gpu_enabled=args.gpu,
         skip_validation=args.skip_validation,
-        render_preview_fn=_rp,
-        setup_scene_fn=_ss,
-        get_scene_bbox_fn=_bbox,
+        render_preview_fn=render_preview,
+        setup_scene_fn=setup_scene,
+        get_scene_bbox_fn=get_scene_bbox,
     )
 
     result_base = {
