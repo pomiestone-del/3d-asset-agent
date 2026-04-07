@@ -107,7 +107,7 @@ def _open_folder(folder: Path):
 
 @st.cache_data(show_spinner="Scanning for models...")
 def _scan_models(root: str) -> list[dict]:
-    """Scan root directory for model files, one per folder.
+    """Scan root directory for model files — all files per folder included.
 
     Returns dicts (not dataclass) because st.cache_data requires serializable return types.
     """
@@ -119,20 +119,19 @@ def _scan_models(root: str) -> list[dict]:
 
     found = []
     for folder, files in sorted(by_folder.items()):
-        best = min(files, key=lambda f: _format_rank(f.suffix.lower()))
-        texture_dir = AssetAgent.discover_texture_dir(best)
-        tex_count = len(collect_images(texture_dir, recursive=True))
-        display_name = folder.name if folder != root_path else best.stem
-
-        found.append({
-            "name": display_name,
-            "model": str(best),
-            "texture_dir": str(texture_dir),
-            "tex_count": tex_count,
-            "format": best.suffix.lower(),
-            "all_formats": sorted({f.suffix.lower() for f in files}),
-            "folder": str(folder),
-        })
+        all_formats = sorted({f.suffix.lower() for f in files})
+        for model_file in sorted(files, key=lambda f: f.name):
+            texture_dir = AssetAgent.discover_texture_dir(model_file)
+            tex_count = len(collect_images(texture_dir, recursive=True))
+            found.append({
+                "name": model_file.stem,
+                "model": str(model_file),
+                "texture_dir": str(texture_dir),
+                "tex_count": tex_count,
+                "format": model_file.suffix.lower(),
+                "all_formats": all_formats,
+                "folder": str(folder),
+            })
     return found
 
 
