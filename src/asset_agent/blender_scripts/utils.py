@@ -167,22 +167,49 @@ def import_obj(filepath: str) -> list[bpy.types.Object]:
 def export_glb(filepath: str) -> None:
     """Export the current scene as a GLB file.
 
+    Builds the keyword arguments dynamically so the same code runs on
+    Blender 3.4 through 4.2+ without raising TypeError for removed params.
+
+    Notable API changes across Blender versions:
+      * export_colors   — removed in 4.2 (vertex colors now via export_attributes)
+      * export_apply    — removed in 4.2, replaced by use_mesh_modifiers
+      * export_attributes — added in 3.2 (covers vertex colors + custom attrs)
+
     Args:
         filepath: Destination ``.glb`` path.
     """
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-    bpy.ops.export_scene.gltf(
-        filepath=filepath,
-        export_format="GLB",
-        export_image_format="AUTO",
-        export_materials="EXPORT",
-        export_colors=True,
-        export_apply=True,
-        export_texcoords=True,
-        export_normals=True,
-        export_tangents=True,
-        export_yup=True,
-    )
+
+    # Discover which parameters the installed glTF exporter actually accepts.
+    valid = {p.identifier for p in bpy.ops.export_scene.gltf.get_rna_type().properties}
+
+    kwargs: dict = {
+        "filepath": filepath,
+        "export_format": "GLB",
+        "export_image_format": "AUTO",
+        "export_materials": "EXPORT",
+        "export_texcoords": True,
+        "export_normals": True,
+        "export_tangents": True,
+        "export_yup": True,
+    }
+
+    # Modifier application: old name vs new name
+    if "use_mesh_modifiers" in valid:
+        kwargs["use_mesh_modifiers"] = True       # Blender 4.2+
+    elif "export_apply" in valid:
+        kwargs["export_apply"] = True             # Blender ≤ 4.1
+
+    # Vertex colours: old flag vs new attributes flag
+    if "export_colors" in valid:
+        kwargs["export_colors"] = True            # Blender ≤ 4.1
+    elif "export_attributes" in valid:
+        kwargs["export_attributes"] = True        # Blender 4.2+
+
+    # Filter to only params the current version knows about
+    kwargs = {k: v for k, v in kwargs.items() if k == "filepath" or k in valid}
+
+    bpy.ops.export_scene.gltf(**kwargs)
     log.info("Exported GLB -> '%s'.", filepath)
 
 
