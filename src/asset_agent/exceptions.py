@@ -120,3 +120,10 @@ class ValidationError(AssetAgentError):
 
 class ConfigError(AssetAgentError):
     """Raised when configuration loading or parsing fails."""
+
+
+# ── Normal Map Conversion ─────────────────────────────────────────────────────
+
+
+class NormalMapConversionError(AssetAgentError):
+    """Raised when normal map format detection or G-channel conversion fails."""

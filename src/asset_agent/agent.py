@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from asset_agent.core.blender_runner import run_process_asset
+from asset_agent.core.normal_map_converter import NormalConvertMode, NormalFormat, NormalMapConverter
 from asset_agent.core.texture_matcher import TextureMap, create_matcher
 from asset_agent.core.validator import ValidationResult
 from asset_agent.core.validator import validate_glb as _validate_glb
-from asset_agent.exceptions import MissingAlbedoError
+from asset_agent.exceptions import MissingAlbedoError, NormalMapConversionError
 from asset_agent.exporters.glb_exporter import build_textures_payload
 from asset_agent.utils.config import AppConfig, load_config
 from asset_agent.utils.file_utils import ensure_directory
@@ -73,6 +74,7 @@ class AssetAgent:
         output_dir: Path,
         *,
         model_name: str | None = None,
+        normal_format: NormalConvertMode | None = None,
     ) -> ProcessingResult:
         """Run the complete processing pipeline.
 
@@ -81,6 +83,11 @@ class AssetAgent:
             texture_dir: Directory containing PBR texture images.
             output_dir: Where to write GLB and preview PNG.
             model_name: Basename for outputs. Defaults to the model stem.
+            normal_format: Optional normal map format conversion mode.
+                ``NormalConvertMode.AUTO`` auto-detects each normal map's
+                format and converts if needed.  ``DIRECTX_TO_OPENGL`` and
+                ``OPENGL_TO_DIRECTX`` force a specific conversion direction.
+                ``None`` (default) skips conversion entirely.
 
         Returns:
             ``ProcessingResult`` summarizing success, output paths, and errors.
@@ -169,7 +176,14 @@ class AssetAgent:
                     texture_map = TextureMap()
                 textures_payload = build_textures_payload(texture_map.as_dict())
 
-        # 3. Run Blender pipeline
+        # 3. Convert normal maps (optional)
+        if normal_format is not None:
+            ensure_directory(output_dir)
+            textures_payload = self._convert_normal_maps(
+                textures_payload, output_dir, normal_format
+            )
+
+        # 4. Run Blender pipeline
         logger.info("[3/4] Running Blender pipeline...")
         ensure_directory(output_dir)
 
@@ -215,6 +229,95 @@ class AssetAgent:
             validation=validation_result,
             errors=errors,
         )
+
+    # -- Normal map conversion -----------------------------------------------
+
+    @staticmethod
+    def _convert_normal_maps(
+        textures_payload: list[dict],
+        output_dir: Path,
+        mode: NormalConvertMode,
+    ) -> list[dict]:
+        """Convert normal map textures in *textures_payload* in-place.
+
+        For each entry whose ``channel`` is ``"normal"``, detects or derives
+        the source format and converts it using G-channel inversion.  The
+        entry's ``path`` is replaced with the converted file path.
+
+        Args:
+            textures_payload: List of texture descriptor dicts (mutated copy).
+            output_dir: Parent directory; converted files are written under
+                        ``<output_dir>/_converted_normals/``.
+            mode: Conversion mode — ``AUTO``, ``DIRECTX_TO_OPENGL``, or
+                  ``OPENGL_TO_DIRECTX``.
+
+        Returns:
+            Updated payload list (entries with non-normal channels unchanged).
+        """
+        converter = NormalMapConverter()
+        conv_dir = output_dir / "_converted_normals"
+        updated: list[dict] = []
+
+        for entry in textures_payload:
+            if entry.get("channel") != "normal":
+                updated.append(entry)
+                continue
+
+            path = entry["path"]
+            try:
+                if mode == NormalConvertMode.AUTO:
+                    detection = converter.detect_format(path)
+                    # Only convert if we're fairly confident the map needs it.
+                    # Blender's Principled BSDF expects OpenGL convention.
+                    if (
+                        detection.detected_format == NormalFormat.DIRECTX
+                        and detection.confidence >= 0.3
+                    ):
+                        src_fmt, dst_fmt = NormalFormat.DIRECTX, NormalFormat.OPENGL
+                        logger.info(
+                            "  normal map '%s' detected as DirectX (G-mean=%.3f, "
+                            "confidence=%.2f) — converting to OpenGL.",
+                            Path(path).name,
+                            detection.g_channel_mean,
+                            detection.confidence,
+                        )
+                    else:
+                        logger.debug(
+                            "  normal map '%s' detected as OpenGL or low confidence "
+                            "(G-mean=%.3f) — skipping conversion.",
+                            Path(path).name,
+                            detection.g_channel_mean,
+                        )
+                        updated.append(entry)
+                        continue
+                elif mode == NormalConvertMode.DIRECTX_TO_OPENGL:
+                    src_fmt, dst_fmt = NormalFormat.DIRECTX, NormalFormat.OPENGL
+                elif mode == NormalConvertMode.OPENGL_TO_DIRECTX:
+                    src_fmt, dst_fmt = NormalFormat.OPENGL, NormalFormat.DIRECTX
+                else:
+                    updated.append(entry)
+                    continue
+
+                result = converter.convert(path, src_fmt, dst_fmt, str(conv_dir))
+                new_entry = dict(entry)
+                new_entry["path"] = result.output_path
+                updated.append(new_entry)
+                if result.changed:
+                    logger.info(
+                        "  normal map converted: %s -> %s",
+                        Path(path).name,
+                        Path(result.output_path).name,
+                    )
+
+            except NormalMapConversionError as exc:
+                logger.warning(
+                    "  Normal map conversion failed for '%s': %s — using original.",
+                    Path(path).name,
+                    exc,
+                )
+                updated.append(entry)
+
+        return updated
 
     # -- Texture matching (standalone) --------------------------------------
 
@@ -263,6 +366,7 @@ class AssetAgent:
             ".obj", ".fbx", ".blend", ".gltf", ".glb",
             ".stl", ".3ds", ".dxf", ".x3d", ".x3dv",
         ),
+        normal_format: NormalConvertMode | None = None,
     ) -> list[ProcessingResult]:
         """Discover and process all model files under *input_dir*.
 
@@ -274,6 +378,8 @@ class AssetAgent:
             input_dir: Root directory to scan (recursive).
             output_dir: Base output directory.
             extensions: File extensions to consider as models.
+            normal_format: Optional normal map conversion mode applied to
+                every model in the batch (see ``process()`` for details).
 
         Returns:
             List of ``ProcessingResult`` — one per model file found.
@@ -302,6 +408,7 @@ class AssetAgent:
                     texture_dir=texture_dir,
                     output_dir=model_output,
                     model_name=name,
+                    normal_format=normal_format,
                 )
             except Exception as exc:
                 logger.error("Batch item '%s' failed: %s", name, exc)

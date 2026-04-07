@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from asset_agent.agent import AssetAgent
+from asset_agent.core.normal_map_converter import NormalConvertMode
 from asset_agent.utils.logging import setup_logging
 
 app = typer.Typer(
@@ -46,6 +47,14 @@ def process(
     model_name: Optional[str] = typer.Option(None, "--model-name", help="Base name for output files (defaults to model stem)."),
     samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
     resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
+    normal_format: Optional[str] = typer.Option(
+        None, "--normal-format",
+        help=(
+            "Normal map format conversion: 'auto' (detect & fix DirectX maps), "
+            "'directx-to-opengl', or 'opengl-to-directx'. "
+            "Omit to skip conversion."
+        ),
+    ),
 ) -> None:
     """Run the full processing pipeline: match textures, build material, render, export GLB."""
     setup_logging()
@@ -67,11 +76,21 @@ def process(
             console.print(f"[red]Invalid resolution format: '{resolution}'. Use WxH, e.g. 1920x1080[/red]")
             raise typer.Exit(code=1)
 
+    nf_mode: NormalConvertMode | None = None
+    if normal_format is not None:
+        try:
+            nf_mode = NormalConvertMode(normal_format.lower())
+        except ValueError:
+            valid = ", ".join(m.value for m in NormalConvertMode)
+            console.print(f"[red]Invalid --normal-format '{normal_format}'. Valid: {valid}[/red]")
+            raise typer.Exit(code=1)
+
     result = agent.process(
         model_path=model,
         texture_dir=textures,
         output_dir=output,
         model_name=model_name,
+        normal_format=nf_mode,
     )
 
     if result.success:
@@ -98,6 +117,10 @@ def batch(
     config: Optional[Path] = typer.Option(None, "--config", exists=True, dir_okay=False, help="Override config YAML."),
     samples: Optional[int] = typer.Option(None, "--samples", min=1, help="Render sample count (overrides config)."),
     resolution: Optional[str] = typer.Option(None, "--resolution", help="Render resolution as WxH, e.g. 1920x1080 (overrides config)."),
+    normal_format: Optional[str] = typer.Option(
+        None, "--normal-format",
+        help="Normal map format conversion: 'auto', 'directx-to-opengl', or 'opengl-to-directx'.",
+    ),
 ) -> None:
     """Batch-process all supported 3D model files found under input-dir."""
     setup_logging()
@@ -114,7 +137,16 @@ def batch(
             console.print(f"[red]Invalid resolution format: '{resolution}'. Use WxH, e.g. 1920x1080[/red]")
             raise typer.Exit(code=1)
 
-    results = agent.batch_process(input_dir, output_dir)
+    nf_mode: NormalConvertMode | None = None
+    if normal_format is not None:
+        try:
+            nf_mode = NormalConvertMode(normal_format.lower())
+        except ValueError:
+            valid = ", ".join(m.value for m in NormalConvertMode)
+            console.print(f"[red]Invalid --normal-format '{normal_format}'. Valid: {valid}[/red]")
+            raise typer.Exit(code=1)
+
+    results = agent.batch_process(input_dir, output_dir, normal_format=nf_mode)
 
     if not results:
         console.print("[yellow]No model files found.[/yellow]")
