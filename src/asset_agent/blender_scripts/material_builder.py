@@ -114,10 +114,15 @@ def _build_single_material(
             continue
         y_cursor = connect_fn(nodes, links, bsdf, info, y_cursor, orm_separate_node)
 
-    if "opacity" in tex_by_channel:
+    # Enable transparency blend mode if:
+    # - an explicit opacity channel is present, OR
+    # - the albedo texture has an alpha channel (RGBA PNG)
+    alpha_input = bsdf.inputs["Alpha"]
+    has_alpha = "opacity" in tex_by_channel or bool(alpha_input.links)
+    if has_alpha:
         mat.blend_method = "HASHED"
         mat.shadow_method = "HASHED"
-        log.info("  Blend method set to HASHED for opacity.")
+        log.info("  Blend method set to HASHED for transparency.")
 
     return mat
 
@@ -305,6 +310,10 @@ def _connect_albedo(nodes, links, bsdf, info, y_cursor, _orm_node) -> float:
         return y_cursor
     links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     log.info("  albedo -> Base Color (%s)", info["color_space"])
+    # If the texture has an alpha channel, wire it to BSDF Alpha automatically.
+    if tex.image and tex.image.channels == 4:
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        log.info("  albedo alpha channel -> Alpha (detected RGBA texture)")
     return y_cursor + _Y_STEP
 
 
