@@ -148,29 +148,25 @@ def _to_model_info(d: dict) -> ModelInfo:
 
 
 def _display_result_card(m: ModelInfo, result: ProcessingResult, item_elapsed: float, output_folder: Path):
-    """Render a single result card with preview, info, and open-folder button."""
-    cols = st.columns([1, 3, 1])
+    """Render a single result card with previews, info, and open-folder button."""
+    # Collect available preview images
+    previews: list[tuple[str, str]] = []  # (label, path)
+    if result.preview_path and result.preview_path.exists():
+        previews.append(("PBR Render", str(result.preview_path)))
+    if result.glb_preview_path and result.glb_preview_path.exists():
+        previews.append(("GLB Re-import", str(result.glb_preview_path)))
 
-    with cols[0]:
-        if result.success and result.preview_path and result.preview_path.exists():
-            st.image(str(result.preview_path), use_container_width=True)
-        elif result.success:
-            st.markdown(":white_check_mark:")
-        else:
-            st.markdown(":x:")
-
-    with cols[1]:
+    # Info + open-folder row
+    info_col, btn_col = st.columns([5, 1])
+    with info_col:
         if result.success:
-            st.markdown(
-                f"**{m.name}** &nbsp; `{m.format}` &nbsp; {item_elapsed:.1f}s"
-            )
+            st.markdown(f"**{m.name}** &nbsp; `{m.format}` &nbsp; {item_elapsed:.1f}s")
             if result.glb_path:
                 st.caption(f"GLB: `{result.glb_path}`")
         else:
             st.markdown(f"**{m.name}** &nbsp; :red[FAILED]")
             st.caption("; ".join(result.errors[:2]))
-
-    with cols[2]:
+    with btn_col:
         if output_folder.exists():
             st.button(
                 ":open_file_folder: Open",
@@ -178,6 +174,16 @@ def _display_result_card(m: ModelInfo, result: ProcessingResult, item_elapsed: f
                 on_click=_open_folder,
                 args=(output_folder,),
             )
+
+    # Preview images — one column per image
+    if previews:
+        img_cols = st.columns(len(previews))
+        for col, (label, path) in zip(img_cols, previews):
+            with col:
+                st.caption(label)
+                st.image(path, use_container_width=True)
+    elif not result.success:
+        st.markdown(":x: No preview available")
 
     st.divider()
 

@@ -291,22 +291,133 @@ def main() -> int:
         return 1
 
     # ------------------------------------------------------------------
-    # Optional validation
+    # Step 7: Re-import GLB → render validation preview + validate
     # ------------------------------------------------------------------
-    if not args.skip_validation:
-        log.info("=== Post-export validation ===")
-        errors = validate_glb(glb_path)
-        if errors:
-            result = {"status": "fail", "errors": errors, "glb": glb_path, "preview": render_path}
-            print(json.dumps(result))
-            return 2
-    else:
-        errors = []
+    glb_preview_path = str(output_dir / f"{args.model_name}_glb_preview.png")
 
-    result = {"status": "pass", "errors": [], "glb": glb_path, "preview": render_path}
+    log.info("=== Step 7/7: GLB re-import preview + validation ===")
+    glb_preview_rendered, errors = _render_and_validate_glb(
+        glb_path=glb_path,
+        preview_path=glb_preview_path,
+        engine=args.render_engine,
+        resolution=(args.render_width, args.render_height),
+        samples=args.render_samples,
+        denoise=args.denoise,
+        film_transparent=args.film_transparent,
+        gpu_enabled=args.gpu,
+        skip_validation=args.skip_validation,
+        render_preview_fn=render_preview,
+        setup_scene_fn=setup_scene,
+        get_scene_bbox_fn=get_scene_bbox,
+    )
+
+    result_base = {
+        "glb": glb_path,
+        "preview": render_path,
+        "glb_preview": glb_preview_path if glb_preview_rendered else None,
+    }
+
+    if errors:
+        result = {**result_base, "status": "fail", "errors": errors}
+        print(json.dumps(result))
+        return 2
+
+    result = {**result_base, "status": "pass", "errors": []}
     print(json.dumps(result))
     log.info("=== Done ===")
     return 0
+
+
+def _render_and_validate_glb(
+    glb_path: str,
+    preview_path: str,
+    *,
+    engine: str,
+    resolution: tuple[int, int],
+    samples: int,
+    denoise: bool,
+    film_transparent: bool,
+    gpu_enabled: bool,
+    skip_validation: bool,
+    render_preview_fn,
+    setup_scene_fn,
+    get_scene_bbox_fn,
+) -> tuple[bool, list[str]]:
+    """Re-import the exported GLB, render a preview, then validate materials.
+
+    Combines the re-import render and validation in a single scene so we
+    only pay the import cost once.
+
+    Returns:
+        (rendered, errors) — rendered is True if the preview was written.
+    """
+    import bpy  # type: ignore[import-unresolved]
+
+    log = logging.getLogger("blender_scripts.process_asset")
+    errors: list[str] = []
+    rendered = False
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    try:
+        bpy.ops.import_scene.gltf(filepath=glb_path)
+    except Exception as exc:
+        errors.append(f"Failed to re-import GLB: {exc}")
+        return rendered, errors
+
+    imported_meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    if not imported_meshes:
+        errors.append("No mesh objects found after re-importing GLB.")
+        return rendered, errors
+
+    # Render re-import preview
+    try:
+        center, _, _, diagonal = get_scene_bbox_fn(imported_meshes)
+        setup_scene_fn(
+            center,
+            diagonal,
+            engine=engine,
+            resolution=resolution,
+            samples=samples,
+            denoise=denoise,
+            film_transparent=film_transparent,
+            gpu_enabled=gpu_enabled,
+        )
+        render_preview_fn(preview_path)
+        rendered = True
+        log.info("GLB re-import preview rendered -> '%s'.", preview_path)
+    except Exception as exc:
+        log.warning("GLB re-import render failed: %s", exc)
+
+    # Material validation
+    if not skip_validation:
+        for mat in bpy.data.materials:
+            if not mat.use_nodes:
+                errors.append(f"Material '{mat.name}': use_nodes is False.")
+                continue
+            nodes = mat.node_tree.nodes
+            bsdf_nodes = [n for n in nodes if n.type == "BSDF_PRINCIPLED"]
+            if not bsdf_nodes:
+                errors.append(f"Material '{mat.name}': no Principled BSDF node found.")
+                continue
+            bsdf = bsdf_nodes[0]
+            tex_nodes = [n for n in nodes if n.type == "TEX_IMAGE"]
+            if tex_nodes:
+                base_color_input = bsdf.inputs.get("Base Color")
+                if base_color_input is None or not base_color_input.links:
+                    errors.append(f"Material '{mat.name}': Base Color input is not connected.")
+            for tex in tex_nodes:
+                if tex.image is None:
+                    errors.append(f"Material '{mat.name}': image node '{tex.name}' has no image.")
+                elif tex.image.packed_file is None:
+                    errors.append(
+                        f"Material '{mat.name}': image '{tex.image.name}' is not packed into the GLB."
+                    )
+        if errors:
+            log.warning("GLB validation found %d issue(s).", len(errors))
+        else:
+            log.info("GLB validation passed.")
+
+    return rendered, errors
 
 
 if __name__ == "__main__":

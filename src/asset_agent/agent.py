@@ -33,6 +33,7 @@ class ProcessingResult:
     success: bool
     glb_path: Path | None = None
     preview_path: Path | None = None
+    glb_preview_path: Path | None = None
     texture_map: TextureMap | None = None
     validation: ValidationResult | None = None
     errors: list[str] = field(default_factory=list)
@@ -208,6 +209,11 @@ class AssetAgent:
         errors = blender_result.get("errors", [])
         glb_path = Path(blender_result["glb"]) if "glb" in blender_result else None
         preview_path = Path(blender_result["preview"]) if "preview" in blender_result else None
+        glb_preview_path = (
+            Path(blender_result["glb_preview"])
+            if blender_result.get("glb_preview")
+            else None
+        )
 
         # 4. Summarize
         validation_result = ValidationResult(
@@ -225,6 +231,7 @@ class AssetAgent:
             success=success,
             glb_path=glb_path,
             preview_path=preview_path,
+            glb_preview_path=glb_preview_path,
             texture_map=texture_map,
             validation=validation_result,
             errors=errors,
